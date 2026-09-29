@@ -1,0 +1,5 @@
+# .NET build output (source tree only; release builds under app-v0.x are kept)
+**/bin/
+**/obj/
+*.user
+.vs/

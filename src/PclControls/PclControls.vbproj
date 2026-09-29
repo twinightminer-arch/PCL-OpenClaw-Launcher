@@ -1,0 +1,4 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net10.0-windows</TargetFramework><UseWPF>true</UseWPF><RootNamespace>PclControls</RootNamespace><OptionStrict>Off</OptionStrict></PropertyGroup>
+  <ItemGroup><Import Include="System.Windows"/><Import Include="System.Windows.Controls"/><Import Include="System.Windows.Media"/></ItemGroup>
+</Project>

@@ -1,0 +1,296 @@
+using System.Diagnostics;
+using System.IO;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Data;
+using System.Windows.Media;
+using System.Windows.Threading;
+using Microsoft.Win32;
+namespace ClawLauncher;
+
+public sealed partial class MainWindow : Window
+{
+ readonly Store store;
+ readonly Runner runner;
+ readonly StackPanel body=new();
+ readonly TextBlock pageTitle=new(),pageNote=new(),status=new(),gatewayBadge=new();
+ readonly ComboBox instancePicker=new();
+ readonly TextBox log=new() {IsReadOnly=true,AcceptsReturn=true,TextWrapping=TextWrapping.Wrap,VerticalScrollBarVisibility=ScrollBarVisibility.Auto,FontFamily=new FontFamily("Consolas"),MinHeight=440};
+ readonly Dictionary<string,Process> owned=new();
+ readonly List<string> logLines=[];
+ readonly Dictionary<string,Button> nav=new();
+ readonly DispatcherTimer timer=new(){Interval=TimeSpan.FromSeconds(60)};
+ readonly bool screenshot;
+ Instance current;
+ string page="启动总览";
+ bool busy, closing;
+ CancellationTokenSource? refreshCancellation;
+ int refreshGeneration;
+ readonly Dictionary<string,DateTime> refreshTimes=new();
+ CancellationTokenSource? cancellation;
+ JsonNode? gateway;
+ List<ItemRow> plugins=[],skills=[],channels=[];
+ DateTime? checkedAt;
+ DataGrid? activeGrid;
+ TextBox? filter;
+ List<ItemRow> activeRows=[];
+ public MainWindow(bool screenshot=false) {
+  this.screenshot=screenshot;
+  Style=(Style)Application.Current.FindResource(typeof(Window));
+  store=new Store();runner=new Runner(store.Settings.Node);
+  current=store.Settings.Instances.FirstOrDefault(i=>i.Id==store.Settings.Selected)??store.Settings.Instances[0];
+  Title="PCL · OpenClaw Launcher — OCL";Width=1040;Height=660;MinWidth=850;MinHeight=540;WindowStartupLocation=WindowStartupLocation.CenterScreen;
+  runner.Log+=AddLog;
+  BuildShell();ApplyAppearance();SelectPage("启动总览");
+  Loaded+=async(_,_)=>{if(!screenshot){await PlayOpening();if(store.Settings.Appearance.MusicAutoPlay)PlayTrack(0);await Refresh();timer.Start();}};
+  Closed+=(_,_)=>media.Close();
+  timer.Tick+=async(_,_)=>{if(!busy&&page=="启动总览")await Refresh();};
+  Closing+=(_,e)=>{
+   closing=true;timer.Stop();refreshCancellation?.Cancel();cancellation?.Cancel();
+   foreach(var process in owned.Values)try{if(!process.HasExited)process.Kill(true);}catch(InvalidOperationException){}
+  };
+ }
+ static SolidColorBrush Brush(string color)=>new((Color)ColorConverter.ConvertFromString(color));
+ internal void CapturePage(string name){SelectPage(name);if(name=="开场动画")ShowSplashFrame();}
+ static TextBlock Text(string text,double size=13,string color="#666666")=>new(){Text=text,FontSize=size,Foreground=Brush(color),TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,0,0,9)};
+ static TextBox Input(string text="",double width=300)=>new(){Text=text,Width=width,HorizontalAlignment=HorizontalAlignment.Left};
+ Button Button(string text,Action action,bool primary=false) {
+  var b=new Button{Content=text};if(primary){b.SetResourceReference(Control.BorderBrushProperty,"AccentBrush");b.SetResourceReference(Control.ForegroundProperty,"AccentBrush");b.FontWeight=FontWeights.SemiBold;}
+  b.Click+=(_,_)=>{try{action();}catch(Exception e){Error(e);}};return b;
+ }
+ Button AsyncButton(string text,Func<Task> action,bool primary=false)=>Button(text,()=>_ = Operate(action),primary);
+ static WrapPanel Row(params UIElement[] controls){var row=new WrapPanel();foreach(var c in controls)row.Children.Add(c);return row;}
+ void AddLog(string message) {
+  if(closing)return;
+  if(!Dispatcher.CheckAccess()){Dispatcher.BeginInvoke(()=>AddLog(message));return;}
+  var text=$"[{DateTime.Now:HH:mm:ss}] {SafeLog.Clean(message)}";logLines.Add(text);if(logLines.Count>1500)logLines.RemoveRange(0,logLines.Count-1500);
+  if(page=="操作日志"){log.AppendText(text+Environment.NewLine);if(log.Text.Length>200000)log.Text=string.Join(Environment.NewLine,logLines);log.ScrollToEnd();}
+ }
+ void Error(Exception e) {AddLog(e.Message);status.Text="操作失败，详见日志";MessageBox.Show(this,SafeLog.Clean(e.Message),"操作未完成",MessageBoxButton.OK,MessageBoxImage.Warning);}
+ async Task Operate(Func<Task> action) {
+  if(closing)return;if(busy){status.Text="已有操作正在执行，请查看进度或点击取消。";return;}refreshCancellation?.Cancel();busy=true;instancePicker.IsEnabled=false;body.IsEnabled=false;cancellation=new();status.Text="正在处理…";
+  try{await action();status.Text="操作完成 · "+DateTime.Now.ToString("HH:mm:ss");}catch(OperationCanceledException){if(!closing)status.Text="操作已取消";}catch(Exception e){if(!closing)Error(e);}finally{busy=false;instancePicker.IsEnabled=true;body.IsEnabled=true;cancellation.Dispose();cancellation=null;}
+ }
+ bool Confirm(string text)=>MessageBox.Show(this,text,"确认操作",MessageBoxButton.OKCancel,MessageBoxImage.Question)==MessageBoxResult.OK;
+ async Task<CommandResult> Run(params string[] args)=>await runner.Run(current,args,120,cancellation?.Token??default);
+ async Task<JsonNode> Json(params string[] args) {var result=await Run(args);if(!result.Ok)throw new Exception(result.Summary);return result.Json()??throw new Exception("命令未返回可识别的数据："+result.Summary);}
+ async Task Execute(params string[] args){var result=await runner.Run(current,args,600,cancellation?.Token??default);AddLog(result.Summary);if(!result.Ok)throw new Exception(result.Summary);}
+ async Task Refresh() {
+  refreshCancellation?.Cancel();
+  var source=new CancellationTokenSource();refreshCancellation=source;
+  var token=source.Token;var generation=++refreshGeneration;var selected=current;var destination=page;
+  bool Valid()=>!closing&&!token.IsCancellationRequested&&generation==refreshGeneration&&current==selected&&page==destination;
+  async Task<JsonNode?> Query(params string[] args){var result=await runner.Run(selected,args,30,token);token.ThrowIfCancellationRequested();if(!result.Ok)throw new Exception(result.Summary);return result.Json();}
+  try {
+   if(destination is not ("启动总览" or "软件连接" or "插件管理" or "Skills 管理"))return;
+   status.Text="正在后台检查状态，可继续切换页面…";
+   if(destination=="启动总览"||destination=="软件连接") {var value=await Query("gateway","status","--json");if(!Valid())return;gateway=value;}
+   if(destination=="插件管理"){var value=ReadModel.Plugins(await Query("plugins","list","--json"));if(!Valid())return;plugins=value;}
+   if(destination=="Skills 管理"){var value=ReadModel.Skills(await Query("skills","list","--json"));if(!Valid())return;skills=value;}
+   if(destination=="软件连接") {
+    var catalog=await Query("channels","list","--all","--json");
+    var live=await Query("channels","status","--probe","--timeout","10000","--json");
+    if(!Valid())return;channels=ReadModel.Channels(catalog,live,ReadModel.B(gateway?["rpc"],"ok")==true);
+   }
+   if(Valid()){checkedAt=DateTime.Now;refreshTimes[selected.Id+destination]=DateTime.Now;SelectPage(destination);status.Text="状态已更新";}
+  }catch(OperationCanceledException){}catch(Exception e){if(Valid()){if(destination is "启动总览" or "软件连接"){gateway=new JsonObject{["rpc"]=new JsonObject{["ok"]=false,["error"]=SafeLog.Clean(e.Message)}};SelectPage(destination);}AddLog(e.Message);status.Text="状态检查失败，详见操作日志；可继续使用其他页面";}}
+  finally{if(refreshCancellation==source)refreshCancellation=null;source.Dispose();}
+ }
+ void SelectPage(string name) {
+  page=name;body.IsEnabled=!busy;if(name=="操作日志")log.Text=string.Join(Environment.NewLine,logLines);pageTitle.Text=name;body.Children.Clear();activeGrid=null;filter=null;
+  UpdateNavigation();
+  pageNote.Text=checkedAt==null?"所选实例："+current.Name:"所选实例："+current.Name+"  ·  最近检查 "+checkedAt.Value.ToString("HH:mm:ss");
+  switch(name){case "启动总览":Overview();break;case "版本与实例":Versions();break;case "插件管理":PluginPage();break;case "Skills 管理":SkillPage();break;case "软件连接":ChannelPage();break;case "整合包":PackPage();break;case "操作日志":LogPage();break;case "设置与关于":SettingsPage();break;case "版本下载":DownloadPage();break;case "个性化":AppearancePage();break;case "背景音乐":MusicPage();break;case "关于":AboutPage();break;}
+  ApplyOverviewVisibility();AnimateContent();
+ }
+ async Task StartGatewayCore() {
+  LaunchProgress("正在检查已有网关…");
+  Runner.EnsureGatewayConfiguration(current);
+  var check=await runner.Run(current,["gateway","status","--json"],20,cancellation?.Token??default);var snapshot=check.Json();
+  if(ReadModel.B(snapshot?["rpc"],"ok")==true){AddLog("网关已经运行，无需重复启动。");gateway=snapshot;SelectPage(page);return;}
+  LaunchProgress("正在启动 OpenClaw，首次启动可能需要一两分钟…");
+  if(owned.TryGetValue(current.Id,out var existing)&&!existing.HasExited){AddLog("等待已启动的网关就绪。");}
+  else if(ReadModel.B(snapshot?["service"],"loaded")==true)await Execute("gateway","start");
+  else {
+   var instance=current;var process=runner.StartGateway(instance,line=>AddLog("["+instance.Name+"] "+line));owned[instance.Id]=process;
+   process.Exited+=(_,_)=>AddLog("["+instance.Name+"] 网关进程已退出，请检查日志。");
+   await Task.Delay(3000,cancellation?.Token??default);if(process.HasExited)throw new Exception("网关启动后退出。请查看操作日志，确认配置、模型和依赖是否完整。");
+  }
+  var deadline=DateTime.UtcNow.AddSeconds(90);bool ready=false;
+  while(DateTime.UtcNow<deadline) {
+   cancellation?.Token.ThrowIfCancellationRequested();
+   if(owned.TryGetValue(current.Id,out var child)&&child.HasExited)throw new Exception("网关启动失败：\n"+string.Join(Environment.NewLine,logLines.TakeLast(8)));
+   var probe=await runner.Run(current,["gateway","status","--json"],15,cancellation?.Token??default);
+   var value=probe.Json();if(ReadModel.B(value?["rpc"],"ok")==true){gateway=value;ready=true;break;}
+   LaunchProgress("网关正在初始化，正在等待连接检查通过…");
+   await Task.Delay(1000,cancellation?.Token??default);
+  }
+  if(!ready)throw new Exception("网关进程尚未通过连接检查。请查看操作日志，或稍后刷新状态。");
+  checkedAt=DateTime.Now;SelectPage(page);AddLog("网关已启动，连接检查通过。");
+ }
+ async Task StopGateway() {
+  if(owned.TryGetValue(current.Id,out var p)&&!p.HasExited) {
+   if(!Confirm("停止本实例的网关进程？正在处理的任务会中断。"))return;
+   // Only terminate the exact child process held by this launcher; never kill by port/name.
+   p.Kill(true);await p.WaitForExitAsync();p.Dispose();owned.Remove(current.Id);AddLog("已停止本启动器创建的网关进程。");
+  }else {
+   var s=await Json("gateway","status","--json");
+   if(ReadModel.B(s?["service"],"loaded")==true)await Execute("gateway","stop");
+   else if(ReadModel.B(s?["rpc"],"ok")==true)throw new Exception("网关由其他程序启动，且未注册系统服务。请在原启动程序中停止它。");
+   else AddLog("当前未检测到可停止的网关。");
+  }
+  await Refresh();
+ }
+ void Versions() {
+  body.Children.Add(Card("已安装的实例",InstanceList()));
+  body.Children.Add(Card("当前版本",Text(current.Version,25,"#C8323C"),Text(current.Runtime),Text(current.Managed?"独立实例：配置和工作目录单独保存。":"现有安装：使用所选配置；切换版本前建议创建独立实例。")));
+  var runtime=Input(current.Runtime,540);
+  var known=store.Settings.Instances.Select(i=>i.Runtime).ToList();var versionsFolder=Path.Combine(store.Root,"versions");
+  if(Directory.Exists(versionsFolder))known.AddRange(Directory.GetDirectories(versionsFolder).Where(d=>!Path.GetFileName(d).StartsWith(".")&&File.Exists(Path.Combine(d,"ocl-install.json"))).Select(d=>Path.Combine(d,"node_modules","openclaw")).Where(d=>File.Exists(Path.Combine(d,"openclaw.mjs"))));
+  var library=new ComboBox{Width=540,HorizontalAlignment=HorizontalAlignment.Left,ItemsSource=known.Distinct(StringComparer.OrdinalIgnoreCase).ToList(),SelectedItem=current.Runtime};
+  library.SelectionChanged+=(_,_)=>{if(library.SelectedItem is string path)runtime.Text=path;};
+  body.Children.Add(Card("本机版本库",library,Text("选择已登记的版本后，在下方应用；新下载的版本会保存在本机版本库。")));
+  body.Children.Add(Card("选择已有版本目录",runtime,Row(Button("浏览目录",()=>{var dialog=new OpenFolderDialog();if(dialog.ShowDialog(this)==true)runtime.Text=dialog.FolderName;}),AsyncButton("应用到当前实例",async()=>{
+   if(owned.TryGetValue(current.Id,out var process)&&!process.HasExited)throw new Exception("请先停止当前网关，再切换版本。");
+   if(!File.Exists(Path.Combine(runtime.Text,"openclaw.mjs")))throw new Exception("该目录没有 openclaw.mjs。");
+   var check=await Json("gateway","status","--json");if(ReadModel.B(check?["rpc"],"ok")==true)throw new Exception("请先停止当前网关，再切换版本。");
+   if(!Confirm("将当前实例切换到：\n"+runtime.Text+"\n旧版本可能不兼容现有数据，建议用新实例测试。"))return;
+   current.Runtime=Path.GetFullPath(runtime.Text);store.Save();SelectPage(page);
+  }))));
+  body.Children.Add(Card("下载版本",Text("从完整版本列表选择正式版、预览版或历史版本，自动下载并创建实例。"),Button("前往自动安装",()=>Navigate("版本下载"),true)));
+  var name=Input("新的 OpenClaw 实例",280);var port=Input((store.Settings.Instances.Max(i=>i.Port)+1).ToString(),100);
+  body.Children.Add(Card("创建独立实例",Text("为新实例创建独立配置、工作目录和随机网关令牌；不会复制聊天记录与账号密钥。"),Row(name,port),AsyncButton("创建实例",async()=>{
+   if(!int.TryParse(port.Text,out var number))throw new Exception("端口必须是数字。");if(!File.Exists(Path.Combine(runtime.Text,"openclaw.mjs")))throw new Exception("请先选择有效的版本目录。");
+   var added=store.Create(name.Text,runtime.Text,number);current=added;instancePicker.Items.Refresh();instancePicker.SelectedItem=added;gateway=null;plugins=[];skills=[];channels=[];checkedAt=null;SelectPage(page);await Task.CompletedTask;
+  })));
+ }
+ DataGrid Table(List<ItemRow> rows,bool account=false) {
+  activeRows=rows;filter=Input("",360);filter.ToolTip="按名称、状态或说明筛选";filter.TextChanged+=(_,_)=>{if(activeGrid!=null)activeGrid.ItemsSource=activeRows.Where(r=>(r.Name+" "+r.State+" "+r.Detail).Contains(filter.Text,StringComparison.OrdinalIgnoreCase)).ToList();};
+  body.Children.Add(Row(Text("筛选",13),filter));
+  var table=new DataGrid{Height=280,ItemsSource=rows};
+  table.Columns.Add(new DataGridTextColumn{Header="名称",Binding=new Binding("Name"),Width=new DataGridLength(150)});
+  table.Columns.Add(new DataGridTextColumn{Header="状态",Binding=new Binding("State"),Width=new DataGridLength(160)});
+  if(account)table.Columns.Add(new DataGridTextColumn{Header="账号",Binding=new Binding("Account"),Width=new DataGridLength(100)});
+  table.Columns.Add(new DataGridTextColumn{Header=account?"说明":"来源",Binding=new Binding(account?"Detail":"Source"),Width=new DataGridLength(1,DataGridLengthUnitType.Star)});
+  var detail=Text(rows.Count==0?"尚未加载列表，请点击刷新状态。":"选择条目查看详情。",12);
+  table.SelectionChanged+=(_,_)=>{if(table.SelectedItem is ItemRow r)detail.Text=SafeLog.Clean(r.Name+"\n"+r.Detail);};
+  body.Children.Add(Card("条目列表 · "+rows.Count,table,detail));activeGrid=table;return table;
+ }
+ ItemRow Selected()=>activeGrid?.SelectedItem as ItemRow??throw new Exception("请先在列表中选择一个条目。");
+ void PluginPage() {
+  pageNote.Text="安装、启用与加载状态分开管理。更改后通常需要重启网关。";
+  body.Children.Add(Row(AsyncButton("启用所选",()=>PluginAction("enable")),AsyncButton("禁用所选",()=>PluginAction("disable")),AsyncButton("更新所选",()=>PluginAction("update")),AsyncButton("卸载所选",()=>PluginAction("uninstall")),AsyncButton("插件诊断",async()=>{await Execute("plugins","doctor");SelectPage("操作日志");})));
+  Table(plugins);
+  var spec=Input("",450);spec.ToolTip="例如 @openclaw/telegram 或本地插件目录";
+  var trust=new CheckBox{Content="信任此外部来源，并允许替换同名安装",Margin=new Thickness(0,0,0,12)};
+  body.Children.Add(Card("安装插件",Text("输入官方包名、npm 包引用或本地目录；安装结果以 OpenClaw 的实际输出为准。"),trust,Row(spec,AsyncButton("安装",async()=>{
+   if(string.IsNullOrWhiteSpace(spec.Text))throw new Exception("请填写插件来源。");if(!Confirm("在 "+current.Name+" 安装插件：\n"+spec.Text+(trust.IsChecked==true?"\n已允许执行此外部来源并替换同名安装。":"")))return;
+   var args=new List<string>{"plugins","install",spec.Text.Trim()};if(trust.IsChecked==true)args.Add("--force");await Execute(args.ToArray());await Refresh();
+  },true),Button("本地目录",()=>{var dialog=new OpenFolderDialog();if(dialog.ShowDialog(this)==true)spec.Text=dialog.FolderName;}))));
+ }
+ async Task PluginAction(string action) {
+  var row=Selected();if(!Confirm($"对 {current.Name} 的插件 {row.Name} 执行 {action}？"))return;
+  if(action=="uninstall")await Execute("plugins",action,row.Id,"--force");else await Execute("plugins",action,row.Id);await Refresh();
+ }
+ void SkillPage() {
+  pageNote.Text="依赖就绪表示通过环境检查，不代表已经完成真实任务。选中条目可查看缺少的程序或配置。";
+  body.Children.Add(Row(AsyncButton("启用所选",()=>SkillToggle(true)),AsyncButton("禁用所选",()=>SkillToggle(false)),AsyncButton("卸载所选",UninstallSkill),AsyncButton("依赖检查",async()=>{await Execute("skills","check");SelectPage("操作日志");}),AsyncButton("更新已跟踪 Skills",async()=>{if(Confirm("更新当前实例中由 ClawHub 跟踪的 Skills？")){await Execute("skills","update","--all");await Refresh();}})));
+  Table(skills);
+  var spec=Input("",460);spec.ToolTip="@owner/slug 或含 SKILL.md 的本地目录";
+  body.Children.Add(Card("安装 Skill",Text("可填写 ClawHub 的 @owner/slug，或选择包含 SKILL.md 的本地文件夹。"),Row(spec,AsyncButton("安装",async()=>{
+   if(string.IsNullOrWhiteSpace(spec.Text))throw new Exception("请填写 Skill 来源。");if(!Confirm("安装 Skill：\n"+spec.Text))return;await Execute("skills","install",spec.Text.Trim());await Refresh();
+  },true),Button("本地目录",()=>{var dialog=new OpenFolderDialog();if(dialog.ShowDialog(this)==true)spec.Text=dialog.FolderName;}))));
+ }
+ async Task SkillToggle(bool enabled) {
+  var row=Selected();await SetSkill(row.Id,enabled);await Refresh();
+ }
+ async Task SetSkill(string name,bool enabled) {
+  var info=await Json("skills","info",name,"--json");if(info["error"]!=null)throw new Exception(info["error"]!.ToString());
+  var key=ReadModel.S(info,"skillKey",name);
+  await Execute("config","set","skills.entries["+JsonSerializer.Serialize(key)+"].enabled",enabled?"true":"false","--strict-json");
+ }
+ async Task UninstallSkill() {
+  var row=Selected();var info=await Json("skills","info",row.Id,"--json");
+  if(ReadModel.B(info,"bundled")==true||ReadModel.S(info,"source").Contains("plugin"))throw new Exception("内置或插件附带的 Skill 请使用禁用，或卸载所属插件。");
+  var path=ReadModel.S(info,"filePath");if(!File.Exists(path))throw new Exception("未找到 Skill 文件。");
+  var list=await Json("skills","list","--json");var dir=Path.GetDirectoryName(Path.GetFullPath(path))!;
+  var roots=new[]{ReadModel.S(list,"managedSkillsDir"),Path.Combine(ReadModel.S(list,"workspaceDir"),"skills")};
+  if(!roots.Any(root=>!string.IsNullOrWhiteSpace(root)&&string.Equals(Path.GetDirectoryName(dir),Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar),StringComparison.OrdinalIgnoreCase)))throw new Exception("只允许卸载工作区或共享 Skills 目录下的独立 Skill；其他来源请禁用。");
+  if((File.GetAttributes(dir)&FileAttributes.ReparsePoint)!=0)throw new Exception("该 Skill 是链接，请在来源处管理或使用禁用。");
+  if(!Confirm("将 Skill 移到启动器的回收目录：\n"+dir+"\n可手动移回原目录恢复。"))return;
+  var trash=Path.Combine(store.Root,"removed-skills",DateTime.Now.ToString("yyyyMMdd-HHmmss")+"-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(Path.GetDirectoryName(trash)!);Directory.Move(dir,trash);AddLog("Skill 已移到 "+trash+"；原位置 "+dir);await Refresh();
+ }
+ void ChannelPage() {
+  pageNote.Text="微信 / Telegram / Signal / QQ / 邮箱，以及本机发现的其他渠道。连接结果来自网关实时探测。";
+  body.Children.Add(Row(AsyncButton("配置所选渠道",async()=>{var row=Selected();if(row.Id.Length==0)throw new Exception("该项尚无已发现的适配器，请先安装对应插件。");OpenWizard(["channels","add","--channel",row.Id]);await Task.CompletedTask;}),AsyncButton("登录所选渠道",async()=>{var row=Selected();if(row.Id.Length==0)throw new Exception("请先安装对应适配器。");var args=new List<string>{"channels","login","--channel",row.Id};if(row.Account.Length>0)args.AddRange(["--account",row.Account]);OpenWizard(args.ToArray());await Task.CompletedTask;}),AsyncButton("渠道日志",async()=>{var row=Selected();if(row.Id.Length==0)throw new Exception("未发现对应适配器。");await Execute("channels","logs","--channel",row.Id,"--lines","100");SelectPage("操作日志");})));
+  Table(channels,true);
+  body.Children.Add(Card("连接状态说明",Text("“探测通过”表示适配器的健康检查成功；“已连接”表示网关报告连接已建立。端到端收发仍需用实际账号验证。"),Text("若微信、QQ 或邮箱通过第三方插件、Skill、Webhook 接入，只有适配器公开的状态才能显示。没有状态接口时会明确显示未验证。"),Button("打开账号配置向导",()=>OpenWizard(["channels","add"]))));
+ }
+ void OpenWizard(string[] args) {
+  if(!Confirm("将打开 OpenClaw 的交互配置窗口。完成后回到启动器刷新状态。\n实例："+current.Name))return;
+  // Encoded PowerShell avoids shell interpolation of user paths, and supports interactive CLI prompts.
+  static string Quote(string value)=>"'"+value.Replace("'","''")+"'";
+  var lines=new List<string>{"[Console]::OutputEncoding = [System.Text.Encoding]::UTF8"};
+  foreach(var key in new[]{"OPENCLAW_PROFILE","OPENCLAW_STATE_DIR","OPENCLAW_CONFIG_PATH"})lines.Add("Remove-Item Env:"+key+" -ErrorAction SilentlyContinue");
+  if(current.State.Length>0)lines.Add("$env:OPENCLAW_STATE_DIR="+Quote(current.State));if(current.Config.Length>0)lines.Add("$env:OPENCLAW_CONFIG_PATH="+Quote(current.Config));
+  lines.Add("Set-Location -LiteralPath "+Quote(current.Runtime));lines.Add("& "+Quote(runner.Node)+" "+Quote(current.Entry)+" "+string.Join(" ",args.Select(Quote)));
+  var info=new ProcessStartInfo("powershell.exe"){UseShellExecute=true};info.ArgumentList.Add("-NoExit");info.ArgumentList.Add("-EncodedCommand");info.ArgumentList.Add(Convert.ToBase64String(Encoding.Unicode.GetBytes(string.Join("\n",lines))));Process.Start(info);
+ }
+ void PackPage() {
+  pageNote.Text="以可审查的清单管理一组版本、插件与 Skills；账号凭据不随整合包导出。";
+  body.Children.Add(Card("导出当前整合包",Text("保存 OpenClaw 版本、插件及 Skill 启停状态。能确定来源的扩展会记录安装引用；不能自动还原的扩展会列为待补充项。"),AsyncButton("导出 .clawpack.json",ExportPack,true)));
+  body.Children.Add(Card("导入整合包",Text("先查看完整清单，再创建独立实例逐项安装。任何失败都会保留日志；不会覆盖当前实例。需要单独完成模型和软件账号配置。"),AsyncButton("选择并预览整合包",ImportPack)));
+  body.Children.Add(Card("整合包的边界",Text("这是依赖与启停清单，不包含聊天记录、令牌、模型密钥或本地 Skill 文件。需要本地文件的项目会明确列出，不会显示为已恢复。")));
+ }
+ async Task ExportPack() {
+  var pluginJson=await Json("plugins","list","--json");var skillJson=await Json("skills","list","--json");
+  var installsResult=await Run("config","get","plugins.installs","--json");var installs=installsResult.Ok?installsResult.Json():null;
+  var pack=new Pack{Name=current.Name,Version=current.Version};
+  foreach(var p in (pluginJson["plugins"] as JsonArray??[]).Where(p=>p!=null)) {
+   var id=ReadModel.S(p,"id");var bundled=ReadModel.S(p,"origin")=="bundled";var spec=ReadModel.S(installs?[id],"spec");
+   if(!bundled&&!Pack.IsPortableSpec(spec)){pack.Unresolved.Add("plugin: "+id+"（缺少可移植安装来源）");continue;}
+   pack.Entries.Add(new(id,bundled?null:spec,"plugin",ReadModel.B(p,"enabled")==true));
+  }
+  foreach(var s in (skillJson["skills"] as JsonArray??[]).Where(s=>s!=null)) {
+   var id=ReadModel.S(s,"name");if(ReadModel.B(s,"bundled")!=true){pack.Unresolved.Add("skill: "+id+"（请在清单中补充 @owner/slug，或在导入后手动安装）");continue;}
+   pack.Entries.Add(new(id,null,"skill",ReadModel.B(s,"disabled")!=true));
+  }
+  var dialog=new SaveFileDialog{Filter="OpenClaw 整合包|*.clawpack.json",FileName="OpenClaw.clawpack.json"};if(dialog.ShowDialog(this)!=true)return;
+  File.WriteAllText(dialog.FileName,JsonSerializer.Serialize(pack,new JsonSerializerOptions{WriteIndented=true,Encoder=System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping}));AddLog("已导出整合包；待补充项 "+pack.Unresolved.Count);MessageBox.Show(this,"整合包已导出。\n待补充来源的项目："+pack.Unresolved.Count,"导出完成");
+ }
+ async Task ImportPack() {
+  var dialog=new OpenFileDialog{Filter="OpenClaw 整合包|*.clawpack.json;*.json"};if(dialog.ShowDialog(this)!=true)return;var pack=Pack.Load(dialog.FileName);
+  var preview=JsonSerializer.Serialize(pack,new JsonSerializerOptions{WriteIndented=true,Encoder=System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping});
+  var review=new Window{Owner=this,Title="整合包预览 · "+pack.Name,Width=760,Height=650,WindowStartupLocation=WindowStartupLocation.CenterOwner};var dock=new DockPanel{Margin=new Thickness(20)};
+  var approve=Button("创建独立实例并安装",()=>review.DialogResult=true,true);DockPanel.SetDock(approve,Dock.Bottom);dock.Children.Add(approve);dock.Children.Add(new TextBox{Text=preview,IsReadOnly=true,TextWrapping=TextWrapping.Wrap,VerticalScrollBarVisibility=ScrollBarVisibility.Auto});review.Content=dock;
+  if(review.ShowDialog()!=true)return;
+  var runtime=current.Version==pack.Version?current.Runtime:await RuntimeInstall.Install(store,runner,pack.Version,cancellation?.Token??default);
+  var added=store.Create(pack.Name+" · 导入",runtime,store.Settings.Instances.Max(i=>i.Port)+1);current=added;instancePicker.Items.Refresh();instancePicker.SelectedItem=added;
+  var failures=new List<string>();
+  foreach(var entry in pack.Entries) {
+   cancellation?.Token.ThrowIfCancellationRequested();
+   try {
+    if(entry.Install!=null)await Execute(entry.Kind=="plugin"?"plugins":"skills","install",entry.Install);
+    if(entry.Kind=="plugin")await Execute("plugins",entry.Enabled?"enable":"disable",entry.Id);else await SetSkill(entry.Id,entry.Enabled);
+   }catch(Exception e){failures.Add(entry.Id+": "+SafeLog.Clean(e.Message));}
+  }
+  gateway=null;SelectPage(page);var message=$"清单处理结束。失败 {failures.Count} 项，待手动补充 {pack.Unresolved.Count} 项。\n请单独配置模型与软件账号。";AddLog(message+"\n"+string.Join("\n",failures));MessageBox.Show(this,message,"整合包结果");
+ }
+ void LogPage() {
+  body.Children.Add(Row(Button("导出日志",()=>{var dialog=new SaveFileDialog{Filter="文本日志|*.txt",FileName="OpenClaw-launcher-log.txt"};if(dialog.ShowDialog(this)==true)File.WriteAllText(dialog.FileName,SafeLog.Clean(string.Join(Environment.NewLine,logLines)));}),Button("清空显示",()=>{logLines.Clear();log.Clear();})));
+  body.Children.Add(Text("日志已过滤常见令牌字段；分享前仍请检查个人路径及第三方插件输出。",12));body.Children.Add(log);
+ }
+ void SettingsPage() {
+  var node=Input(store.Settings.Node,510);var state=Input(current.State,510);var config=Input(current.Config,510);
+  body.Children.Add(Card("运行环境与配置",Text("Node.js 可执行文件"),node,Text("OpenClaw 状态目录（留空使用默认目录）"),state,Text("配置文件路径（留空使用默认规则；不是程序目录里的任意 JSON）"),config,Row(Button("选择配置文件",()=>{var dialog=new OpenFileDialog{Filter="配置文件|*.json;*.json5|所有文件|*.*"};if(dialog.ShowDialog(this)==true)config.Text=dialog.FileName;}),Button("保存",()=>{
+   if(owned.TryGetValue(current.Id,out var p)&&!p.HasExited)throw new Exception("请先停止该实例网关，再修改运行设置。");
+   RuntimeInstall.ResolveExecutable(node.Text.Trim());if(config.Text.Length>0&&!File.Exists(config.Text))throw new Exception("配置文件不存在。");if(state.Text.Length>0&&!Directory.Exists(state.Text))throw new Exception("状态目录不存在。");
+   store.Settings.Node=node.Text.Trim();runner.Node=store.Settings.Node;current.State=state.Text.Trim();current.Config=config.Text.Trim();store.Save();gateway=null;checkedAt=null;AddLog("设置已保存。");
+  }),Button("打开配置向导",()=>OpenWizard(["configure"])),AsyncButton("验证配置",async()=>{await Execute("config","validate");MessageBox.Show(this,"配置验证通过。","检查完成");}))));
+  body.Children.Add(Card("关于与署名",Text("PCL 原作者：龙腾猫跃",17,"#353535"),Row(Button("原作者与源码",()=>OpenLink("https://github.com/Meloong-Git/PCL")),Button("赞助 PCL 原作者",()=>OpenLink("https://meloong.com/afd/a/LTCat"))),Text("PCL-OpenClaw-Launcher 0.5.0 · 第三方基于 PCL 独立二次创作，与 PCL、OpenClaw、DeepSeek 官方无隶属关系。"),Text("PCL 来源：FormMain 顶栏与分栏结构、PageLaunchLeft 启动区、MyButton / MyRadioButton 外观、MyCard 卡片和 MyDropShadow 阴影。已移除 Minecraft 内容，按你的要求改为红色 OCL。"),Text("源码随附于 src；许可与使用指南见 LICENCE。需要 .NET Desktop Runtime 10 和 OpenClaw 所需的 Node.js。")));
+ }
+ static void OpenLink(string url)=>Process.Start(new ProcessStartInfo(url){UseShellExecute=true});
+}
