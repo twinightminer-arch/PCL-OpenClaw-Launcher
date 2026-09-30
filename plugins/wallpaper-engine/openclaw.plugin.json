@@ -2,7 +2,7 @@
   "id": "wallpaper-engine",
   "name": "Wallpaper Engine",
   "description": "Browse the local Wallpaper Engine library and switch OpenClaw Control UI image, GIF and video backgrounds.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "configSchema": {
     "type": "object",
     "properties": {
@@ -37,6 +37,7 @@
       "wallpaper_search",
       "wallpaper_info",
       "wallpaper_ui_set",
+      "wallpaper_ui_import",
       "wallpaper_ui_config",
       "wallpaper_ui_off",
       "wallpaper_ui_status",

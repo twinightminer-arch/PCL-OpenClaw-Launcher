@@ -18,7 +18,7 @@ test('wallpaper plugin: real registration, isolated config, assets and authentic
     await writeFile(path.join(libraryRoot,'456','project.json'),JSON.stringify({title:'Outside',preview:'../../outside.png'}));
     const tools=new Map(),methods=new Map(),services=[];
     plugin.register({pluginConfig:{libraryRoot,controlUiRoot},registerTool:t=>tools.set(t.name,t),registerGatewayMethod:(name,handler,options)=>methods.set(name,{handler,options}),registerService:s=>services.push(s)});
-    assert.equal(tools.size,8);assert.equal(methods.size,5);
+    assert.equal(tools.size,9);assert.equal(methods.size,6);
     assert.equal(methods.get('wallpaper.set').options.scope,'operator.write');
     assert.equal(methods.get('wallpaper.list').options.scope,'operator.read');
     await services[0].start();await services[0].start();
@@ -43,5 +43,17 @@ test('wallpaper plugin: real registration, isolated config, assets and authentic
     const video=(await tools.get('wallpaper_ui_set').execute('test',{query:'123'})).details;
     assert.equal(video.config.mediaType,'video');assert.equal(video.config.image,'wp-123.mp4');
     assert.equal(await readFile(video.uiAsset,'utf8'),'video-fixture');
+    // Direct import of an arbitrary local media file (not from the library).
+    await writeFile(path.join(root,'local-bg.png'),'PNG-fixture');
+    const imported=(await tools.get('wallpaper_ui_import').execute('test',{path:path.join(root,'local-bg.png')})).details;
+    assert.equal(imported.applied,true);assert.equal(imported.kind,'image');
+    assert.equal(await readFile(imported.uiAsset,'utf8'),'PNG-fixture');
+    assert.equal(imported.config.title,'local-bg.png');assert.equal(imported.config.mediaType,'image');
+    await assert.rejects(()=>Promise.resolve(tools.get('wallpaper_ui_import').execute('test',{path:path.join(root,'local-bg.png')+'.txt'})));
+    // Console typography via RPC.
+    await methods.get('wallpaper.configure').handler({params:{fontCustom:true,fontColor:'#101010',fontSize:15},respond:(...v)=>response=v});
+    assert.equal(response[0],true);assert.equal(response[1].config.fontColor,'#101010');assert.equal(response[1].config.fontSize,15);assert.equal(response[1].config.fontCustom,true);
+    await methods.get('wallpaper.configure').handler({params:{fontColor:'not-a-color'},respond:(...v)=>response=v});assert.equal(response[0],false);
+    await methods.get('wallpaper.import').handler({params:{},respond:(...v)=>response=v});assert.equal(response[0],false);
   } finally {await rm(root,{recursive:true,force:true});}
 });

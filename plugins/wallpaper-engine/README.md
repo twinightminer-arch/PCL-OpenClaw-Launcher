@@ -1,6 +1,11 @@
-# Wallpaper Engine 0.2.0
+# Wallpaper Engine 0.3.0
 
-将本机 Wallpaper Engine 库中的壁纸作为 OpenClaw 网页控制台背景。无需额外 HTTP 服务，不读取浏览器令牌；选择器复用已认证的网关连接。
+将本机 Wallpaper Engine 库中的壁纸，或任意本地图片 / GIF / 视频文件，作为 OpenClaw 网页控制台背景，并可自定义控制台字体颜色与字号。无需额外 HTTP 服务，不读取浏览器令牌；选择器复用已认证的网关连接。
+
+## 新增（0.3.0）
+
+- `wallpaper_ui_import` / RPC `wallpaper.import`：直接把库外的本地媒体文件（绝对路径）复制进控制台资源目录并应用，支持 png/jpg/webp/bmp/gif/mp4/webm/mov/mkv/avi。
+- `wallpaper_ui_config` 新增字体项：`fontCustom`（总开关）、`fontColor`、`fontSize`(10–28)、`fontWeight`、`fontFamily`、`caretColor`；控制台右下角“壁纸”面板提供颜色选择器与字号滑块。
 
 ## 安装
 

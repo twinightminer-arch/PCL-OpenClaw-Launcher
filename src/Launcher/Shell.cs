@@ -15,7 +15,7 @@ public sealed partial class MainWindow
  readonly TextBlock musicBadge=new();
  ColumnDefinition sidebarColumn=new();
  Border contentPane=new();
- string GroupFor(string value)=>value switch {"版本下载" or "版本与实例" or "插件管理" or "Skills 管理" or "整合包"=>"下载","软件连接"=>"连接","个性化" or "背景音乐" or "设置与关于"=>"设置","操作日志" or "关于"=>"更多",_=>"启动"};
+ string GroupFor(string value)=>value switch {"版本下载" or "版本与实例"=>"下载","软件连接"=>"连接","个性化" or "背景音乐" or "设置与关于" or "插件管理" or "Skills 管理" or "整合包"=>"设置","操作日志" or "关于"=>"更多",_=>"启动"};
  void Navigate(string destination) {refreshCancellation?.Cancel();SelectPage(destination);if(!busy&&(!refreshTimes.TryGetValue(current.Id+destination,out var time)||DateTime.Now-time>TimeSpan.FromSeconds(60)))_ = Refresh();}
  void BuildShell() {
   WindowStyle=WindowStyle.None;AllowsTransparency=true;Background=Brushes.Transparent;ResizeMode=ResizeMode.CanResize;
@@ -45,7 +45,7 @@ public sealed partial class MainWindow
   var head=new DockPanel{Margin=new Thickness(0,0,5,11)};var actions=Row(Button("↻",()=>{if(busy)return;if(page=="版本下载")_ = Operate(LoadCatalog);else _ = Refresh();}),Button("×",()=>{cancellation?.Cancel();refreshCancellation?.Cancel();}));DockPanel.SetDock(actions,Dock.Right);head.Children.Add(actions);pageTitle.FontSize=14;pageTitle.FontWeight=FontWeights.Bold;pageTitle.Margin=new Thickness(0,0,0,3);pageNote.FontSize=11;pageNote.Foreground=Brush("#888888");pageNote.TextTrimming=TextTrimming.CharacterEllipsis;var titleStack=new StackPanel{VerticalAlignment=VerticalAlignment.Center};var heading=new StackPanel{Orientation=Orientation.Horizontal};heading.Children.Add(pageTitle);
   overviewToggle=Button("收起 ▴",()=>{overviewCollapsed=!overviewCollapsed;ApplyOverviewVisibility();});overviewToggle.Foreground=Brush("#D9363E");overviewToggle.BorderThickness=new Thickness(0);overviewToggle.Background=Brushes.Transparent;overviewToggle.Margin=new Thickness(10,-5,0,0);overviewToggle.Padding=new Thickness(5,2,5,2);heading.Children.Add(overviewToggle);titleStack.Children.Add(heading);titleStack.Children.Add(pageNote);head.Children.Add(titleStack);right.Children.Add(head);
   contentPane=new Border{Child=new ScrollViewer{Content=body,VerticalScrollBarVisibility=ScrollBarVisibility.Auto,HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled,Padding=new Thickness(3,3,7,3)}};Grid.SetRow(contentPane,1);right.Children.Add(contentPane);
-  var footer=new DockPanel();musicBadge.FontSize=11;musicBadge.MaxWidth=170;musicBadge.TextTrimming=TextTrimming.CharacterEllipsis;musicBadge.VerticalAlignment=VerticalAlignment.Center;musicBadge.Foreground=Brush("#777777");musicBadge.Cursor=Cursors.Hand;musicBadge.MouseLeftButtonDown+=(_,_)=>Navigate("背景音乐");DockPanel.SetDock(musicBadge,Dock.Right);footer.Children.Add(musicBadge);status.FontSize=10;status.Foreground=Brush("#999999");status.Text="OCL 0.6.0";status.Margin=new Thickness(0,4,5,0);status.TextTrimming=TextTrimming.CharacterEllipsis;footer.Children.Add(status);Grid.SetRow(footer,2);right.Children.Add(footer);Grid.SetColumn(right,1);workspace.Children.Add(right);
+  var footer=new DockPanel();musicBadge.FontSize=11;musicBadge.MaxWidth=170;musicBadge.TextTrimming=TextTrimming.CharacterEllipsis;musicBadge.VerticalAlignment=VerticalAlignment.Center;musicBadge.Foreground=Brush("#777777");musicBadge.Cursor=Cursors.Hand;musicBadge.MouseLeftButtonDown+=(_,_)=>Navigate("背景音乐");DockPanel.SetDock(musicBadge,Dock.Right);footer.Children.Add(musicBadge);status.FontSize=10;status.Foreground=Brush("#999999");status.Text="OCL 0.7.0";status.Margin=new Thickness(0,4,5,0);status.TextTrimming=TextTrimming.CharacterEllipsis;footer.Children.Add(status);Grid.SetRow(footer,2);right.Children.Add(footer);Grid.SetColumn(right,1);workspace.Children.Add(right);
   splash.Visibility=Visibility.Collapsed;splash.Background=Brushes.White;Grid.SetRowSpan(splash,2);Panel.SetZIndex(splash,20);frame.Children.Add(splash);Content=outer;
   instancePicker.ItemsSource=store.Settings.Instances;instancePicker.SelectedItem=current;instancePicker.SelectionChanged+=async(_,_)=>{if(instancePicker.SelectedItem is Instance selected&&selected!=current){if(busy){instancePicker.SelectedItem=current;return;}current=selected;channelCatalog=null;store.Settings.Selected=current.Id;store.Save();gateway=null;plugins=[];skills=[];channels=[];checkedAt=null;SelectPage(page);await Refresh();}};
  }
@@ -60,9 +60,9 @@ public sealed partial class MainWindow
   var currentBox=new StackPanel{Margin=new Thickness(12)};currentBox.Children.Add(Text("当前实例",11,"#999999"));instancePicker.Width=152;instancePicker.Margin=new Thickness(0);currentBox.Children.Add(instancePicker);DockPanel.SetDock(currentBox,Dock.Bottom);dock.Children.Add(currentBox);
   var menu=new StackPanel{Margin=new Thickness(0,12,0,0)};dock.Children.Add(menu);
   var entries=GroupFor(page) switch {
-   "下载"=>new[]{("自动安装","版本下载","⬡"),("本地实例","版本与实例","▣"),("插件","插件管理","◇"),("Skills","Skills 管理","✧"),("整合包","整合包","▤")},
+   "下载"=>new[]{("自动安装","版本下载","⬡"),("本地实例","版本与实例","▣")},
    "连接"=>new[]{("软件连接","软件连接","◎"),("网关设置","设置与关于","⚙")},
-   "设置"=>new[]{("个性化","个性化","✧"),("背景音乐","背景音乐","♫"),("运行与网关","设置与关于","⚙")},
+   "设置"=>new[]{("实例设置","设置与关于","⚙"),("插件","插件管理","◇"),("Skills","Skills 管理","✧"),("整合包","整合包","▤"),("个性化","个性化","✦"),("背景音乐","背景音乐","♫")},
    _=>new[]{("关于","关于","ⓘ"),("操作日志","操作日志","≡")}
   };
   foreach(var (label,destination,glyph) in entries) {
@@ -90,8 +90,7 @@ public sealed partial class MainWindow
   var online=ReadModel.B(gateway?["rpc"],"ok")==true;
   body.Children.Add(Card(store.Settings.Appearance.WelcomeText,Text("这里是你的 OpenClaw 启动器。选择实例，管理扩展，然后开始工作。",13),Row(Button("下载 OpenClaw",()=>Navigate("版本下载"),true),Button("软件连接",()=>Navigate("软件连接")),Button("个性化你的启动器",()=>Navigate("个性化")))));
   body.Children.Add(Card("实例状态",GatewaySummary(),Text("安装目录："+current.Runtime,11,"#888888"),Text(SafeLog.Clean(ReadModel.S(gateway?["rpc"],"error",online?"网关 RPC 检查通过。":"点击刷新检查当前实例，或先完成运行配置。")),12),Row(Button("刷新",()=>{if(!busy)_ = Refresh();}),AsyncButton("停止",StopGateway),AsyncButton("重启",async()=>{await StopGateway();await StartGateway();}),AsyncButton("控制台",OpenDashboard))));
-  body.Children.Add(Card("常用功能",Row(Button("插件管理",()=>Navigate("插件管理")),Button("Skills",()=>Navigate("Skills 管理")),Button("整合包",()=>Navigate("整合包"))),Text("插件已加载、Skill 依赖就绪与渠道已连接是不同状态。",11,"#999999")));
-  body.Children.Add(Card("启动器",Text("OCL 0.6.0  ·  PCL 风格 OpenClaw 独立启动器",12),Text("PCL 原作者：龙腾猫跃。本程序为第三方独立二次创作。",11,"#999999")));
+  body.Children.Add(Card("启动器",Text("OCL 0.7.0  ·  PCL 风格 OpenClaw 独立启动器",12),Text("PCL 原作者：龙腾猫跃。本程序为第三方独立二次创作。",11,"#999999")));
  }
  UIElement InstanceList() {
   var stack=new StackPanel();foreach(var item in store.Settings.Instances.ToList()) {var dock=new DockPanel{Margin=new Thickness(0,0,0,8)};var choose=Button(item==current?"当前实例":"选择",()=>{instancePicker.SelectedItem=item;});DockPanel.SetDock(choose,Dock.Right);dock.Children.Add(choose);var labels=new StackPanel();labels.Children.Add(Text(item.Name,13,"#444444"));labels.Children.Add(Text(item.Version+"  ·  "+(item.Managed?"独立配置":"已有配置"),11,"#999999"));dock.Children.Add(labels);stack.Children.Add(dock);}return stack;
@@ -114,6 +113,6 @@ public sealed partial class MainWindow
   await Task.Delay(850);if(store.Settings.Appearance.Animations){splash.BeginAnimation(OpacityProperty,new DoubleAnimation(1,0,TimeSpan.FromMilliseconds(230)));await Task.Delay(240);}splash.Visibility=Visibility.Collapsed;splash.BeginAnimation(OpacityProperty,null);splash.Opacity=1;
  }
  void AboutPage() {
-  body.Children.Add(Card("关于 OCL",new Image{Source=Brand.Image(),Width=80,Height=85,HorizontalAlignment=HorizontalAlignment.Left,Margin=new Thickness(0,0,0,12)},Text("PCL · OpenClaw Launcher",20,"#555555"),Text("0.6.0  ·  Windows 桌面版"),Text("OCL 作者：Twinight_Miner",16,"#D9363E"),Text("QQ:1879648323",14),Text("PCL 原作者：龙腾猫跃",14),Row(Button("PCL 项目",()=>OpenLink("https://github.com/Meloong-Git/PCL")),Button("赞助原作者",()=>OpenLink("https://meloong.com/afd/a/LTCat"))),Text("第三方基于 PCL 独立二次创作。界面结构与控件外观参照 PCL 源码，OpenClaw 管理逻辑独立实现。没有 Minecraft 启动、账号、模组、Java 或游戏资源功能。"),Text("完整源码和来源说明随程序提供。DSHL 源码未公开，未反编译其私有实现。",12)));
+  body.Children.Add(Card("关于 OCL",new Image{Source=Brand.Image(),Width=80,Height=85,HorizontalAlignment=HorizontalAlignment.Left,Margin=new Thickness(0,0,0,12)},Text("PCL · OpenClaw Launcher",20,"#555555"),Text("0.7.0  ·  Windows 桌面版"),Text("OCL 作者：Twinight_Miner",16,"#D9363E"),Text("PCL 原作者：龙腾猫跃",14),Row(Button("PCL 项目",()=>OpenLink("https://github.com/Meloong-Git/PCL")),Button("赞助原作者",()=>OpenLink("https://meloong.com/afd/a/LTCat"))),Text("第三方基于 PCL 独立二次创作。界面结构与控件外观参照 PCL 源码，OpenClaw 管理逻辑独立实现。没有 Minecraft 启动、账号、模组、Java 或游戏资源功能。"),Text("完整源码和来源说明随程序提供。DSHL 源码未公开，未反编译其私有实现。",12)));
  }
 }

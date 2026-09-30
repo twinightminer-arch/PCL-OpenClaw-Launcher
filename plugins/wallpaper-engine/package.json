@@ -1,9 +1,9 @@
 {
   "name": "openclaw-plugin-wallpaper-engine",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "private": true,
-  "description": "Browse the local Wallpaper Engine library and switch OpenClaw Control UI image, GIF and video backgrounds.",
+  "description": "Browse the local Wallpaper Engine library or import any local image/GIF/video, apply it behind the OpenClaw Control UI, and tune the console font colour and size.",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "node --test src/plugin.test.mjs"

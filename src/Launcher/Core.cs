@@ -26,6 +26,10 @@ public sealed class Settings
  public string Selected { get; set; } = "";
  public List<Instance> Instances { get; set; } = [];
  public Appearance Appearance { get; set; } = new();
+ // 新实例默认携带的“必要插件/Skill”清单（照搬当前实例采集而来）。
+ // 其余插件需要用户在实例内自行安装或制作。
+ public List<string> DefaultPlugins { get; set; } = [];
+ public List<string> DefaultSkills { get; set; } = [];
 }
 public sealed class Appearance
 {
@@ -70,15 +74,35 @@ public sealed class Store
   var file = Path.Combine(Root,"launcher.json"); var temp = file + ".tmp";
   File.WriteAllText(temp,JsonSerializer.Serialize(Settings,new JsonSerializerOptions { WriteIndented = true })); File.Move(temp,file,true);
  }
- public Instance Create(string name, string runtime, int port) {
+ public Instance Create(string name, string runtime, int port, IReadOnlyList<string>? defaultPlugins=null) {
   if(string.IsNullOrWhiteSpace(name)) throw new Exception("请填写实例名称。");
   if(port < 1024 || port > 65535 || Settings.Instances.Any(i=>i.Port==port)) throw new Exception("请选择 1024–65535 之间未被其他实例使用的端口。");
   var instance = new Instance { Name = name.Trim(),Runtime=runtime,Port=port,Managed=true };
   instance.State=Path.Combine(Root,"instances",instance.Id); instance.Config=Path.Combine(instance.State,"openclaw.json");
   Directory.CreateDirectory(instance.State);
-  var config = new { gateway = new { mode="local",port,bind="loopback",auth=new { mode="token",token=Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32)) } }, agents=new { defaults=new { workspace=Path.Combine(instance.State,"workspace") } } };
-  File.WriteAllText(instance.Config,JsonSerializer.Serialize(config,new JsonSerializerOptions {WriteIndented=true}));
+  var config=new JsonObject {
+   ["gateway"]=new JsonObject { ["mode"]="local",["port"]=port,["bind"]="loopback",["auth"]=new JsonObject { ["mode"]="token",["token"]=Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32)) } },
+   ["agents"]=new JsonObject { ["defaults"]=new JsonObject { ["workspace"]=Path.Combine(instance.State,"workspace") } }
+  };
+  // 新实例只携带“必要插件”（默认集）；其余由用户自行安装或制作。
+  var plugins=(defaultPlugins??Settings.DefaultPlugins).Where(id=>!string.IsNullOrWhiteSpace(id)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+  if(plugins.Count>0) {
+   var entries=new JsonObject();foreach(var id in plugins)entries[id]=new JsonObject { ["enabled"]=true };
+   config["plugins"]=new JsonObject { ["entries"]=entries };
+  }
+  File.WriteAllText(instance.Config,config.ToJsonString(new JsonSerializerOptions {WriteIndented=true}));
   Settings.Instances.Add(instance); Settings.Selected=instance.Id; Save(); return instance;
+ }
+ public void Rename(Instance instance,string name) {
+  if(string.IsNullOrWhiteSpace(name)) throw new Exception("实例名称不能为空。");
+  instance.Name=name.Trim(); Save();
+ }
+ public Instance Duplicate(Instance source,string name) {
+  var clone=new Instance { Name=name.Trim(),Runtime=source.Runtime,Port=Math.Max(1024,Settings.Instances.Max(i=>i.Port)+1),Managed=source.Managed };
+  clone.State=Path.Combine(Root,"instances",clone.Id); clone.Config=Path.Combine(clone.State,"openclaw.json");
+  Directory.CreateDirectory(clone.State);
+  try { if(File.Exists(source.Config)) File.Copy(source.Config,clone.Config,true); } catch(IOException) {}
+  Settings.Instances.Add(clone); Settings.Selected=clone.Id; Save(); return clone;
  }
 }
 public static class SafeLog

@@ -3,6 +3,7 @@
 // OpenClaw Control UI (web interface), and optionally as the Windows desktop
 // wallpaper.
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -47,6 +48,10 @@ const DEFAULT_LIBRARY_ROOT = process.platform === "win32"
 const DEFAULT_CONTROL_UI_ROOT = process.platform === "win32" ? "E:\\openclaw\\dist\\control-ui" : "";
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".bmp", ".webp"]);
 const NEEDS_FRAME_EXTRACTION = new Set([".gif", ".mp4", ".webm", ".mov", ".mkv", ".avi"]);
+// Formats accepted by the "import a local media file" path (independent of the
+// Wallpaper Engine library). GIF stays animated; still images are shown as-is.
+const IMPORT_IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".bmp", ".webp", ".gif"]);
+const IMPORT_VIDEO_EXTENSIONS = new Set([".mp4", ".webm", ".mov", ".mkv", ".avi"]);
 function normalizeType(raw) {
     const value = String(raw ?? "").toLowerCase();
     if (value === "video")
@@ -220,6 +225,12 @@ function defaultUiConfig() {
         scrimColor: "#0b0e13",
         translucentApp: true,
         appAlpha: 0.45,
+        fontCustom: false,
+        fontColor: "#f2f3f5",
+        fontSize: 0,
+        fontWeight: 0,
+        fontFamily: "",
+        caretColor: "#ffffff",
         updatedAt: null,
     };
 }
@@ -454,8 +465,64 @@ const definition = {
             },
         }),
         tool({
+            name: "wallpaper_ui_import",
+            description: "Import a local image, GIF or video file from any path on this machine (not only the Wallpaper Engine library) and use it as the OpenClaw Control UI background. Copies the file into the Control UI assets so the browser can load it.",
+            parameters: Type.Object({
+                path: Type.String({ description: "Absolute path to a local image / GIF / video file." }),
+                title: Type.Optional(Type.String({ description: "Label shown in status; defaults to the file name." })),
+            }),
+            execute: async ({ path: source, title }, config) => {
+                const resolved = await readPluginConfig(config);
+                if (!resolved.controlUiRoot) {
+                    return {
+                        applied: false,
+                        reason: "controlUiRoot is not configured; cannot locate the Control UI asset root.",
+                    };
+                }
+                const ext = path.extname(source).toLowerCase();
+                const isVideo = IMPORT_VIDEO_EXTENSIONS.has(ext);
+                const isImage = IMPORT_IMAGE_EXTENSIONS.has(ext);
+                if (!isVideo && !isImage) {
+                    throw new Error(`Unsupported media extension: ${ext || "(none)"}`);
+                }
+                if (!(await fileExists(source)))
+                    throw new Error(`Media file not found: ${source}`);
+                const stat = await fs.stat(source);
+                if (!stat.isFile())
+                    throw new Error("The given path is not a file.");
+                await ensureUiScript(resolved);
+                const digest = createHash("sha1")
+                    .update(`${source}:${stat.size}:${stat.mtimeMs}`)
+                    .digest("hex")
+                    .slice(0, 12);
+                const assetName = `import-${digest}${ext}`;
+                const assetPath = path.join(uiAssetDir(resolved), assetName);
+                await fs.copyFile(source, assetPath);
+                const current = await readUiConfig(resolved);
+                const next = await writeUiConfig(resolved, {
+                    ...current,
+                    enabled: true,
+                    image: assetName,
+                    mediaType: isVideo ? "video" : "image",
+                    translucentApp: true,
+                    wallpaperId: null,
+                    title: title && title.trim() ? title.trim() : path.basename(source),
+                });
+                return {
+                    applied: true,
+                    target: "openclaw-control-ui",
+                    imported: source,
+                    uiAsset: assetPath,
+                    sizeBytes: stat.size,
+                    kind: isVideo ? "video" : "image",
+                    config: next,
+                    note: "Imported a local media file into the Control UI assets (not from the Wallpaper Engine library).",
+                };
+            },
+        }),
+        tool({
             name: "wallpaper_ui_config",
-            description: "Tune how the Control UI wallpaper looks: opacity, blur, dark scrim, fit, and whether the app shell becomes translucent.",
+            description: "Tune the Control UI background (opacity, blur, dark scrim, fit, translucency) and the console typography (font colour, size, weight, family, caret colour).",
             parameters: Type.Object({
                 opacity: Type.Optional(Type.Number({ description: "Wallpaper opacity 0..1 (default 0.55).", minimum: 0, maximum: 1 })),
                 blur: Type.Optional(Type.Number({ description: "Blur radius in px (default 0).", minimum: 0 })),
@@ -474,6 +541,20 @@ const definition = {
                     minimum: 0,
                     maximum: 1,
                 })),
+                fontCustom: Type.Optional(Type.Boolean({ description: "Enable the custom console typography below (default false)." })),
+                fontColor: Type.Optional(Type.String({ description: "Console text colour #RRGGBB (default #f2f3f5)." })),
+                fontSize: Type.Optional(Type.Number({
+                    description: "Console base font size in px, 10..28; 0 keeps the default.",
+                    minimum: 0,
+                    maximum: 28,
+                })),
+                fontWeight: Type.Optional(Type.Number({
+                    description: "Console font weight 100..900 in steps of 100; 0 keeps the default.",
+                    minimum: 0,
+                    maximum: 900,
+                })),
+                fontFamily: Type.Optional(Type.String({ description: "Console font family; empty string inherits." })),
+                caretColor: Type.Optional(Type.String({ description: "Console caret / selection colour #RRGGBB." })),
             }),
             execute: async (patch, config) => {
                 const resolved = await readPluginConfig(config);
@@ -482,6 +563,18 @@ const definition = {
                     throw new Error("Invalid fit");
                 if (patch.scrimColor && !/^#[0-9a-f]{6}$/i.test(patch.scrimColor))
                     throw new Error("Use a #RRGGBB scrim color");
+                if (patch.fontColor && !/^#[0-9a-f]{6}$/i.test(patch.fontColor))
+                    throw new Error("Use a #RRGGBB font color");
+                if (patch.caretColor && !/^#[0-9a-f]{6}$/i.test(patch.caretColor))
+                    throw new Error("Use a #RRGGBB caret color");
+                if (patch.fontSize !== undefined && (!Number.isFinite(patch.fontSize) || patch.fontSize < 0 || patch.fontSize > 28)) {
+                    throw new Error("fontSize must be 0..28");
+                }
+                if (patch.fontWeight !== undefined && (!Number.isFinite(patch.fontWeight) || patch.fontWeight < 0 || patch.fontWeight > 900)) {
+                    throw new Error("fontWeight must be 0..900");
+                }
+                if (patch.fontFamily !== undefined && patch.fontFamily.length > 120)
+                    throw new Error("fontFamily is too long");
                 const current = await readUiConfig(resolved);
                 const next = await writeUiConfig(resolved, { ...current, ...patch });
                 return { updated: true, config: next };
@@ -576,6 +669,7 @@ export default {
             "wallpaper.list": "wallpaper_list", "wallpaper.set": "wallpaper_ui_set",
             "wallpaper.status": "wallpaper_ui_status", "wallpaper.off": "wallpaper_ui_off",
             "wallpaper.configure": "wallpaper_ui_config",
+            "wallpaper.import": "wallpaper_ui_import",
         })) {
             api.registerGatewayMethod(method, async ({ params, respond }) => {
                 try {
@@ -585,15 +679,25 @@ export default {
                     const input = params ?? {};
                     if (method === "wallpaper.set" && (typeof input.query !== "string" || !input.query.trim()))
                         throw new Error("Wallpaper id is required");
+                    if (method === "wallpaper.import" && (typeof input.path !== "string" || !input.path.trim()))
+                        throw new Error("A local media path is required");
                     if (method === "wallpaper.configure") {
-                        const allowed = new Set(["opacity", "blur", "scrim", "scrimColor", "fit", "translucentApp", "appAlpha"]);
+                        const allowed = new Set(["opacity", "blur", "scrim", "scrimColor", "fit", "translucentApp", "appAlpha", "fontCustom", "fontColor", "fontSize", "fontWeight", "fontFamily", "caretColor"]);
                         for (const [key, value] of Object.entries(input)) {
                             if (!allowed.has(key))
                                 throw new Error("Unknown wallpaper setting");
                             if (["opacity", "scrim", "appAlpha", "blur"].includes(key) && (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > (key === "blur" ? 40 : 1)))
                                 throw new Error("Wallpaper setting outside supported range");
-                            if (key === "translucentApp" && typeof value !== "boolean")
+                            if ((key === "translucentApp" || key === "fontCustom") && typeof value !== "boolean")
                                 throw new Error("Expected boolean");
+                            if (key === "fontSize" && (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 28))
+                                throw new Error("Wallpaper setting outside supported range");
+                            if (key === "fontWeight" && (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 900))
+                                throw new Error("Wallpaper setting outside supported range");
+                            if ((key === "fontColor" || key === "caretColor") && (typeof value !== "string" || !/^#[0-9a-f]{6}$/i.test(value)))
+                                throw new Error("Use a #RRGGBB colour");
+                            if (key === "fontFamily" && (typeof value !== "string" || value.length > 120))
+                                throw new Error("Invalid font family");
                         }
                     }
                     const result = await tool.execute("wallpaper-control-ui", method === "wallpaper.list" ? { limit: 500 } : input);

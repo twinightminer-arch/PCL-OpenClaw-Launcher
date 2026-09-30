@@ -1,0 +1,42 @@
+; PCL OpenClaw Launcher — per-version installer template.
+; Generated placeholders: __VER__ __SRC__ __OUT__ __GUID__
+[Setup]
+AppId={{__GUID__}
+AppName=PCL OpenClaw Launcher
+AppVersion=__VER__
+AppVerName=PCL OpenClaw Launcher __VER__
+AppPublisher=Twinight_Miner
+AppPublisherURL=https://github.com/twinightminer-arch/PCL-OpenClaw-Launcher
+DefaultDirName={localappdata}\Programs\OCL-__VER__
+DefaultGroupName=OCL
+DisableProgramGroupPage=yes
+AllowNoIcons=yes
+OutputDir=__OUT__
+OutputBaseFilename=OCL-__VER__-Setup
+Compression=lzma2
+SolidCompression=yes
+WizardStyle=modern
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
+PrivilegesRequired=lowest
+SetupIconFile=__SRC__\Assets\ocl.ico
+UninstallDisplayIcon={app}\PCL-OpenClaw-Launcher.exe
+DisableWelcomePage=no
+
+[Tasks]
+Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加任务："
+
+[Files]
+Source: "__SRC__\PCL-OpenClaw-Launcher.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "__SRC__\PCL-OpenClaw-Launcher.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "__SRC__\PCL-OpenClaw-Launcher.deps.json"; DestDir: "{app}"; Flags: ignoreversion
+Source: "__SRC__\PCL-OpenClaw-Launcher.runtimeconfig.json"; DestDir: "{app}"; Flags: ignoreversion
+Source: "__SRC__\PclControls.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "__SRC__\Assets\*"; DestDir: "{app}\Assets"; Flags: ignoreversion recursesubdirs
+
+[Icons]
+Name: "{userprograms}\PCL OpenClaw Launcher __VER__"; Filename: "{app}\PCL-OpenClaw-Launcher.exe"
+Name: "{userdesktop}\OCL __VER__"; Filename: "{app}\PCL-OpenClaw-Launcher.exe"; Tasks: desktopicon
+
+[Run]
+Filename: "{app}\PCL-OpenClaw-Launcher.exe"; Description: "启动 OCL"; Flags: nowait postinstall skipifsilent
