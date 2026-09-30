@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>打赏 OCL 作者 · PCL OpenClaw Launcher</title>
+<style>
+:root{
+  --accent:#D9363E;
+  --blue:#1E6FE8;
+  --ink:#353535;
+  --ink-2:#555555;
+  --ink-3:#8A8A8A;
+  --line:#E7E7E7;
+  --card:#FFFFFF;
+  --bg:#F5F5F7;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg);
+  color:var(--ink);
+  font-family:"Microsoft YaHei UI","Microsoft YaHei","PingFang SC","Segoe UI",system-ui,sans-serif;
+  min-height:100vh;
+  display:flex;flex-direction:column;align-items:center;
+  padding:34px 18px 46px;
+}
+.wrap{width:100%;max-width:720px}
+.brand{display:flex;align-items:center;gap:12px;margin-bottom:6px}
+.logo{
+  width:44px;height:44px;border-radius:10px;flex:0 0 auto;
+  background:linear-gradient(135deg,var(--accent),#A61E26);
+  color:#fff;font:600 15px/44px "Segoe UI",sans-serif;text-align:center;
+  letter-spacing:.5px;box-shadow:0 4px 12px rgba(217,54,62,.28);
+}
+h1{font-size:22px;margin:0;font-weight:700;letter-spacing:.3px}
+.sub{color:var(--ink-3);font-size:13px;margin:8px 0 22px;line-height:1.7}
+.lead{
+  background:var(--card);border:1px solid var(--line);border-radius:12px;
+  padding:16px 18px;font-size:13.5px;line-height:1.9;color:var(--ink-2);
+  box-shadow:0 1px 3px rgba(0,0,0,.04);
+}
+.lead b{color:var(--ink)}
+.grid{display:flex;gap:18px;margin:20px 0 6px;flex-wrap:wrap}
+.pay{
+  flex:1 1 240px;background:var(--card);border:1px solid var(--line);border-radius:12px;
+  padding:18px 16px 16px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.04);
+}
+.pay h2{font-size:15px;margin:0 0 2px;display:flex;align-items:center;justify-content:center;gap:8px}
+.dot{width:9px;height:9px;border-radius:50%;display:inline-block}
+.dot.wx{background:#09BB07}
+.dot.ali{background:#1677FF}
+.pay .tip{font-size:11.5px;color:var(--ink-3);margin:4px 0 12px}
+.frame{
+  width:200px;height:300px;margin:0 auto;border-radius:10px;border:1px solid var(--line);
+  background:#FAFAFA;display:flex;align-items:center;justify-content:center;overflow:hidden;position:relative;
+}
+.frame img{width:100%;height:100%;object-fit:contain;display:block}
+.ph{color:var(--ink-3);font-size:12px;line-height:1.85;padding:0 14px}
+.ph code{
+  display:block;margin-top:7px;font-size:11px;color:var(--blue);
+  background:#F0F5FF;border-radius:6px;padding:3px 6px;word-break:break-all;
+  font-family:Consolas,"Courier New",monospace;
+}
+.btn{
+  display:inline-block;margin-top:12px;padding:9px 20px;border-radius:8px;
+  font-size:13px;font-weight:600;text-decoration:none;cursor:pointer;border:1px solid transparent;
+}
+.btn.pcl{background:var(--blue);color:#fff}
+.btn.pcl:hover{background:#1560CC}
+.btn.ghost{background:#fff;color:var(--ink-2);border-color:var(--line)}
+.btn.ghost:hover{border-color:#CFCFCF;color:var(--ink)}
+.foot{margin-top:26px;font-size:12px;color:var(--ink-3);line-height:1.9;border-top:1px solid var(--line);padding-top:16px}
+.foot a{color:var(--accent);text-decoration:none}
+.notice{
+  margin-top:14px;font-size:12px;color:#8A6D1F;background:#FFF8E6;
+  border:1px solid #F3E2B3;border-radius:9px;padding:10px 13px;line-height:1.85;
+}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:center}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="brand">
+    <div class="logo">OCL</div>
+    <div>
+      <h1>打赏 OCL 作者</h1>
+      <div class="sub" style="margin:4px 0 0">PCL · OpenClaw Launcher — 第三方独立二次创作</div>
+    </div>
+  </div>
+
+  <div class="lead">
+    感谢你使用 <b>PCL · OpenClaw Launcher（OCL）</b>。<br>
+    这是一个完全免费、开源、无广告的独立启动器。如果它帮你省了时间、顺手好用，
+    可以扫码请作者喝一杯咖啡 —— 这份支持会直接用在后续版本的维护与功能迭代上。
+    <br><br>
+    <b>打赏完全自愿</b>，不影响任何功能的可用性。
+  </div>
+
+  <div class="grid">
+    <div class="pay">
+      <h2><span class="dot wx"></span>微信收款码</h2>
+      <div class="tip">Twinight_Miner（OCL 作者）</div>
+      <div class="frame">
+        <img id="wechatImg" alt="微信收款码" style="display:none">
+        <div class="ph" id="wechatPh">
+          收款码图片未就位<br>把图片放到本目录并命名
+          <code>wechat.png</code>
+        </div>
+      </div>
+    </div>
+
+    <div class="pay">
+      <h2><span class="dot ali"></span>支付宝收款码</h2>
+      <div class="tip">Setup lightrow（OCL 作者）</div>
+      <div class="frame">
+        <img id="alipayImg" alt="支付宝收款码" style="display:none">
+        <div class="ph" id="alipayPh">
+          收款码图片未就位<br>把图片放到本目录并命名
+          <code>alipay.png</code>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="row" style="margin-top:20px">
+    <a class="btn pcl" href="https://meloong.com/afd/a/LTCat" target="_blank" rel="noopener">打赏 PCL 原作者（龙腾猫跃）</a>
+    <a class="btn ghost" href="https://github.com/Meloong-Git/PCL" target="_blank" rel="noopener">PCL 项目主页</a>
+    <a class="btn ghost" href="https://github.com/twinightminer-arch/PCL-OpenClaw-Launcher" target="_blank" rel="noopener">OCL 项目主页</a>
+  </div>
+
+  <div class="notice">
+    <b>小提示：</b>长按或右键收款码可保存到本地，也可直接截图后用微信 / 支付宝的「扫一扫 → 从相册选取」识别。
+    打赏金额随意，一分也是心意。
+  </div>
+
+  <div class="foot">
+    OCL 是基于 PCL 源码结构与控件外观的第三方独立二次创作，与 PCL、OpenClaw、DeepSeek 官方无隶属关系。<br>
+    PCL 原作者：<a href="https://github.com/Meloong-Git/PCL" target="_blank" rel="noopener">龙腾猫跃</a>
+    · PCL 打赏页：<a href="https://meloong.com/afd/a/LTCat" target="_blank" rel="noopener">爱发电</a><br>
+    本页为本地静态页面，不联网、不收集任何信息。
+  </div>
+
+</div>
+
+<script>
+(function(){
+  function bind(imgId,phId,src){
+    var img=document.getElementById(imgId),ph=document.getElementById(phId);
+    var probe=new Image();
+    probe.onload=function(){img.src=src;img.style.display="block";ph.style.display="none";};
+    probe.onerror=function(){/* 保持占位提示 */};
+    probe.src=src;
+  }
+  bind("wechatImg","wechatPh","wechat.png");
+  bind("alipayImg","alipayPh","alipay.png");
+})();
+</script>
+</body>
+</html>

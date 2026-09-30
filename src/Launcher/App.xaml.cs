@@ -10,6 +10,8 @@ public partial class App : Application
   base.OnStartup(e);
   if(e.Args.Contains("--gateway-smoke")||e.Args.Contains("--ui-smoke"))ShutdownMode=ShutdownMode.OnExplicitShutdown;
   if(e.Args.Contains("--write-brand")){var dir=e.Args.SkipWhile(a=>a!="--write-brand").Skip(1).FirstOrDefault()??Path.Combine(AppContext.BaseDirectory,"Assets");Brand.WriteAssets(dir);Shutdown();return;}
+  // --shortcut <path>：把「指向当前 exe 的快捷方式」写到指定位置（发布时更新桌面/仓库内的 OCL.lnk）。
+  if(e.Args.Contains("--shortcut")){var link=e.Args.SkipWhile(a=>a!="--shortcut").Skip(1).FirstOrDefault();if(!string.IsNullOrWhiteSpace(link))new Store().WriteShortcut(Path.GetFullPath(link));Shutdown();return;}
   DispatcherUnhandledException += (_, a) => {if(e.Args.Contains("--ui-smoke")||e.Args.Contains("--gateway-smoke")||e.Args.Contains("--screenshot")){File.WriteAllText(Path.Combine(AppContext.BaseDirectory,"ui-error.txt"),a.Exception.ToString());a.Handled=true;Shutdown(1);return;}MessageBox.Show(SafeLog.Clean(a.Exception.Message), "启动器错误"); a.Handled = true; };
   var window = new MainWindow(e.Args.Contains("--screenshot")||e.Args.Contains("--gateway-smoke")||e.Args.Contains("--ui-smoke"));
   MainWindow = window;

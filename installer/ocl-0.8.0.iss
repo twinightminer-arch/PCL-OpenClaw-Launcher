@@ -1,5 +1,5 @@
-; PCL OpenClaw Launcher — per-version installer template.
-; Generated placeholders: __VER__ __SRC__ __OUT__
+﻿; PCL OpenClaw Launcher — per-version installer template.
+; Generated placeholders: 0.8.0 E:\openclaw\ocl\app-v0.8.0 E:\openclaw\ocl\installers\0.8.0
 ;
 ; 升级约定（0.8.0 起固定，后续版本不要再改这几项）：
 ;   · AppId 固定不变 → 新版本覆盖安装旧版本，而不是并存。
@@ -10,8 +10,8 @@
 [Setup]
 AppId={{8E1C3A72-0F5B-4D31-9C10-0A1F2B3C4D70}
 AppName=PCL OpenClaw Launcher
-AppVersion=__VER__
-AppVerName=PCL OpenClaw Launcher __VER__
+AppVersion=0.8.0
+AppVerName=PCL OpenClaw Launcher 0.8.0
 AppPublisher=Twinight_Miner
 AppPublisherURL=https://github.com/twinightminer-arch/PCL-OpenClaw-Launcher
 AppSupportURL=https://github.com/twinightminer-arch/PCL-OpenClaw-Launcher
@@ -19,17 +19,17 @@ DefaultDirName={localappdata}\Programs\OCL
 DefaultGroupName=OCL
 DisableProgramGroupPage=yes
 AllowNoIcons=yes
-OutputDir=__OUT__
-OutputBaseFilename=OCL-__VER__-Setup
+OutputDir=E:\openclaw\ocl\installers\0.8.0
+OutputBaseFilename=OCL-0.8.0-Setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=lowest
-SetupIconFile=__SRC__\Assets\ocl.ico
+SetupIconFile=E:\openclaw\ocl\app-v0.8.0\Assets\ocl.ico
 UninstallDisplayIcon={app}\PCL-OpenClaw-Launcher.exe
-UninstallDisplayName=PCL OpenClaw Launcher __VER__
+UninstallDisplayName=PCL OpenClaw Launcher 0.8.0
 DisableWelcomePage=no
 CloseApplications=yes
 CloseApplicationsFilter=PCL-OpenClaw-Launcher.exe
@@ -38,12 +38,12 @@ CloseApplicationsFilter=PCL-OpenClaw-Launcher.exe
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加任务："
 
 [Files]
-Source: "__SRC__\PCL-OpenClaw-Launcher.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "__SRC__\PCL-OpenClaw-Launcher.dll"; DestDir: "{app}"; Flags: ignoreversion
-Source: "__SRC__\PCL-OpenClaw-Launcher.deps.json"; DestDir: "{app}"; Flags: ignoreversion
-Source: "__SRC__\PCL-OpenClaw-Launcher.runtimeconfig.json"; DestDir: "{app}"; Flags: ignoreversion
-Source: "__SRC__\PclControls.dll"; DestDir: "{app}"; Flags: ignoreversion
-Source: "__SRC__\Assets\*"; DestDir: "{app}\Assets"; Flags: ignoreversion recursesubdirs
+Source: "E:\openclaw\ocl\app-v0.8.0\PCL-OpenClaw-Launcher.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "E:\openclaw\ocl\app-v0.8.0\PCL-OpenClaw-Launcher.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "E:\openclaw\ocl\app-v0.8.0\PCL-OpenClaw-Launcher.deps.json"; DestDir: "{app}"; Flags: ignoreversion
+Source: "E:\openclaw\ocl\app-v0.8.0\PCL-OpenClaw-Launcher.runtimeconfig.json"; DestDir: "{app}"; Flags: ignoreversion
+Source: "E:\openclaw\ocl\app-v0.8.0\PclControls.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "E:\openclaw\ocl\app-v0.8.0\Assets\*"; DestDir: "{app}\Assets"; Flags: ignoreversion recursesubdirs
 
 [Icons]
 Name: "{userprograms}\PCL OpenClaw Launcher"; Filename: "{app}\PCL-OpenClaw-Launcher.exe"; WorkingDir: "{app}"

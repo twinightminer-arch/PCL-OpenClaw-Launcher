@@ -45,6 +45,7 @@ public sealed partial class MainWindow : Window
   Title="PCL · OpenClaw Launcher — OCL";Width=1040;Height=660;MinWidth=850;MinHeight=540;WindowStartupLocation=WindowStartupLocation.CenterScreen;
   runner.Log+=AddLog;
   BuildShell();ApplyAppearance();SelectPage("启动总览");
+  if(!screenshot)store.EnsureDesktopShortcut();
   Loaded+=async(_,_)=>{if(!screenshot){await PlayOpening();if(store.Settings.Appearance.MusicAutoPlay)PlayTrack(0);await Refresh();timer.Start();}};
   Closed+=(_,_)=>media.Close();
   timer.Tick+=async(_,_)=>{if(!busy&&refreshCancellation==null&&page is "启动总览" or "软件连接")await Refresh();};
@@ -63,6 +64,10 @@ public sealed partial class MainWindow : Window
  }
  Button AsyncButton(string text,Func<Task> action,bool primary=false)=>Button(text,()=>_ = Operate(action),primary);
  static WrapPanel Row(params UIElement[] controls){var row=new WrapPanel();foreach(var c in controls)row.Children.Add(c);return row;}
+ // 与输入框并排的短标签：去掉落地下边距并垂直居中，避免和输入框错位。
+ static TextBlock Label(string text,double size=13){var t=Text(text,size);t.Margin=new Thickness(0,0,8,0);t.VerticalAlignment=VerticalAlignment.Center;return t;}
+ // 直接浮在壁纸上的工具条/说明：半透明白底圆角，保证任何背景图下文字都可读。
+ static Border Toolbar(params UIElement[] controls){var row=new WrapPanel();foreach(var c in controls)row.Children.Add(c);return new Border{Background=new SolidColorBrush(Color.FromArgb(235,255,255,255)),CornerRadius=new CornerRadius(6),Padding=new Thickness(12,8,12,8),Margin=new Thickness(0,0,0,13),HorizontalAlignment=HorizontalAlignment.Left,Child=row};}
  void AddLog(string message) {
   if(closing)return;
   if(!Dispatcher.CheckAccess()){Dispatcher.BeginInvoke(()=>AddLog(message));return;}
@@ -180,7 +185,7 @@ public sealed partial class MainWindow : Window
  }
  DataGrid Table(List<ItemRow> rows,bool account=false) {
   activeRows=rows;filter=Input("",360);filter.ToolTip="按名称、状态或说明筛选";filter.TextChanged+=(_,_)=>{if(activeGrid!=null)activeGrid.ItemsSource=activeRows.Where(r=>(r.Name+" "+r.State+" "+r.Detail).Contains(filter.Text,StringComparison.OrdinalIgnoreCase)).ToList();};
-  body.Children.Add(Row(Text("筛选",13),filter));
+  body.Children.Add(Toolbar(Label("筛选"),filter));
   var table=new DataGrid{Height=280,ItemsSource=rows};
   table.Columns.Add(new DataGridTextColumn{Header="名称",Binding=new Binding("Name"),Width=new DataGridLength(150)});
   table.Columns.Add(new DataGridTextColumn{Header="状态",Binding=new Binding("State"),Width=new DataGridLength(160)});
@@ -243,7 +248,7 @@ public sealed partial class MainWindow : Window
  void ChannelPage() {
   pageNote.Text="每个应用独立显示检测结果；绿：已连接/探测通过，黄：未验证，红：异常，灰：未配置。";
   body.Children.Add(Row(Button("检测全部",()=>{if(!busy)_=Refresh();}),Button("配置账号",()=>OpenWizard(["channels","add"]))));
-  var search=Input("",350);search.ToolTip="筛选应用名称、账号或状态";body.Children.Add(Row(Text("查找应用"),search));
+  var search=Input("",350);search.ToolTip="筛选应用名称、账号或状态";body.Children.Add(Toolbar(Label("查找应用"),search));
   var cards=new StackPanel();body.Children.Add(cards);
   void Render(){cards.Children.Clear();foreach(var item in channels.Where(r=>(r.Name+" "+r.Account+" "+r.State).Contains(search.Text,StringComparison.OrdinalIgnoreCase))) {
    var name=new StackPanel{Orientation=Orientation.Horizontal};name.Children.Add(Text(item.Name,16,"#444444"));
@@ -252,7 +257,7 @@ public sealed partial class MainWindow : Window
    actions.IsEnabled=item.Id.Length>0;
    cards.Children.Add(Card("",name,Text(item.State+(item.Account.Length>0?" · 账号 "+item.Account:""),13,item.Indicator),Text(item.Detail,11),actions));
   }
-  if(channels.Count==0)cards.Children.Add(Text("正在等待检测结果；点击“检测全部”加载应用列表。"));}
+  if(channels.Count==0)cards.Children.Add(Toolbar(Text("正在等待检测结果；点击“检测全部”加载应用列表。",12)));}
   search.TextChanged+=(_,_)=>Render();Render();
   body.Children.Add(WallpaperConnectionCard());
  }
@@ -331,7 +336,7 @@ public sealed partial class MainWindow : Window
  }
  void LogPage() {
   body.Children.Add(Row(Button("导出日志",()=>{var dialog=new SaveFileDialog{Filter="文本日志|*.txt",FileName="OpenClaw-launcher-log.txt"};if(dialog.ShowDialog(this)==true)File.WriteAllText(dialog.FileName,SafeLog.Clean(string.Join(Environment.NewLine,logLines)));}),Button("清空显示",()=>{logLines.Clear();log.Clear();})));
-  body.Children.Add(Text("日志已过滤常见令牌字段；分享前仍请检查个人路径及第三方插件输出。",12));body.Children.Add(log);
+  body.Children.Add(Toolbar(Text("日志已过滤常见令牌字段；分享前仍请检查个人路径及第三方插件输出。",12)));body.Children.Add(log);
  }
  void SettingsPage() {
   var node=Input(store.Settings.Node,510);var state=Input(current.State,510);var config=Input(current.Config,510);
@@ -344,9 +349,14 @@ public sealed partial class MainWindow : Window
    RuntimeInstall.ResolveExecutable(node.Text.Trim());if(config.Text.Length>0&&!File.Exists(config.Text))throw new Exception("配置文件不存在。");if(state.Text.Length>0&&!Directory.Exists(state.Text))throw new Exception("状态目录不存在。");
    store.Settings.Node=node.Text.Trim();runner.Node=store.Settings.Node;current.State=state.Text.Trim();current.Config=config.Text.Trim();store.Save();gateway=null;checkedAt=null;AddLog("设置已保存。");
   }),Button("打开配置向导",()=>OpenWizard(["configure"])),AsyncButton("验证配置",async()=>{await Execute("config","validate");MessageBox.Show(this,"配置验证通过。","检查完成");}))));
-  body.Children.Add(Card("关于与署名",Text("PCL 原作者：龙腾猫跃",17,"#353535"),Row(Button("原作者与源码",()=>OpenLink("https://github.com/Meloong-Git/PCL")),Button("赞助 PCL 原作者",()=>OpenLink("https://meloong.com/afd/a/LTCat"))),Text("PCL-OpenClaw-Launcher 0.7.0 · 第三方基于 PCL 独立二次创作，与 PCL、OpenClaw、DeepSeek 官方无隶属关系。"),Text("PCL 来源：FormMain 顶栏与分栏结构、PageLaunchLeft 启动区、MyButton / MyRadioButton 外观、MyCard 卡片和 MyDropShadow 阴影。已移除 Minecraft 内容，按你的要求改为红色 OCL。"),Text("源码随附于 src；许可与使用指南见 LICENCE。需要 .NET Desktop Runtime 10 和 OpenClaw 所需的 Node.js。")));
+  body.Children.Add(Card("关于与署名",Text("PCL 原作者：龙腾猫跃",17,"#353535"),Row(Button("原作者与源码",()=>OpenLink("https://github.com/Meloong-Git/PCL")),Button("赞助 PCL 原作者",()=>OpenLink("https://meloong.com/afd/a/LTCat"))),Text("PCL-OpenClaw-Launcher "+Brand.Version+" · 第三方基于 PCL 独立二次创作，与 PCL、OpenClaw、DeepSeek 官方无隶属关系。"),Text("PCL 来源：FormMain 顶栏与分栏结构、PageLaunchLeft 启动区、MyButton / MyRadioButton 外观、MyCard 卡片和 MyDropShadow 阴影。已移除 Minecraft 内容，按你的要求改为红色 OCL。"),Text("源码随附于 src；许可与使用指南见 LICENCE。需要 .NET Desktop Runtime 10 和 OpenClaw 所需的 Node.js。")));
  }
  static void OpenLink(string url)=>Process.Start(new ProcessStartInfo(url){UseShellExecute=true});
+ void OpenDonate() {
+  var page=Path.Combine(AppContext.BaseDirectory,"Assets","donate","index.html");
+  if(File.Exists(page))OpenLink(new Uri(page).AbsoluteUri);
+  else OpenLink("https://github.com/twinightminer-arch/PCL-OpenClaw-Launcher");
+ }
  string InstanceStateRoot()=>current.State.Length>0?current.State:Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),".openclaw");
  void OpenFolder(string path){try{Directory.CreateDirectory(path);Process.Start(new ProcessStartInfo("explorer.exe",path){UseShellExecute=true});}catch(Exception e){Error(e);}}
  void OpenPluginFolder()=>OpenFolder(Path.Combine(InstanceStateRoot(),"extensions"));

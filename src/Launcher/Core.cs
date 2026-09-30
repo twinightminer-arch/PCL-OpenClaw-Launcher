@@ -56,19 +56,95 @@ public sealed class Store
  public string Root { get; }
  public Settings Settings { get; }
  public Store(string? root = null) {
+  var isDefault = root == null;
   Root = root ?? ResolveRoot(AppContext.BaseDirectory);
   Directory.CreateDirectory(Root);
   var file = Path.Combine(Root,"launcher.json");
+  // 更新到新版本时自动保留上一版本的设置数据（背景媒体随 appearance 目录一并带过来）。
+  // 仅对默认（真实）数据目录做迁移，显式传入的临时目录不受历史数据影响。
+  if(isDefault && !File.Exists(file)) AdoptPreviousData();
   Settings = File.Exists(file) ? JsonSerializer.Deserialize<Settings>(File.ReadAllText(file)) ?? new() : new();
   if (Settings.Instances.Count == 0) {
    Settings.Instances.Add(new Instance { State = Environment.GetEnvironmentVariable("OPENCLAW_STATE_DIR") ?? "", Config = Environment.GetEnvironmentVariable("OPENCLAW_CONFIG_PATH") ?? "" });
    Settings.Selected = Settings.Instances[0].Id;
   }
+  // 背景图片与音乐文件复制进当前数据目录，保证换版本后素材仍在。
+  if(isDefault) RelocateAssets();
  }
+ // 稳定共享数据目录（%LOCALAPPDATA%\OCL）：跨版本保留设置、背景媒体与音乐；
+ // 仍支持 data-location.txt 覆盖（开发布局）。
  public static string ResolveRoot(string directory) {
   var pointer=Path.Combine(directory,"data-location.txt");
   if(File.Exists(pointer)) {var path=File.ReadAllText(pointer).Trim();if(path.Length>0)return Path.GetFullPath(path,directory);}
-  return Path.Combine(directory,"Data");
+  return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"OCL");
+ }
+ // 候选旧数据目录：开发布局、同目录 Data、以及 %LOCALAPPDATA%\Programs\OCL-* 各版本。
+ static IEnumerable<string> LegacyCandidates() {
+  var baseDir=AppContext.BaseDirectory;
+  yield return Path.Combine(baseDir,"..","app","Data");
+  yield return Path.Combine(baseDir,"Data");
+  var programs=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Programs");
+  if(!Directory.Exists(programs))yield break;
+  foreach(var dir in Directory.GetDirectories(programs,"OCL*")) {
+   yield return Path.Combine(dir,"Data");
+   foreach(var sub in Directory.GetDirectories(dir,"app*"))yield return Path.Combine(sub,"Data");
+  }
+ }
+ // 取最近一次写入的 launcher.json 作为“上一版本设置”，只迁移设置与 appearance（不搬 versions/instances 大目录）。
+ void AdoptPreviousData() {
+  var source=LegacyCandidates().Where(c=>File.Exists(Path.Combine(c,"launcher.json")))
+   .OrderByDescending(c=>File.GetLastWriteTimeUtc(Path.Combine(c,"launcher.json"))).FirstOrDefault();
+  if(source==null)return;
+  try { File.Copy(Path.Combine(source,"launcher.json"),Path.Combine(Root,"launcher.json"),true); } catch(IOException) {}
+  var appearance=Path.Combine(source,"appearance");
+  if(Directory.Exists(appearance))CopyDir(appearance,Path.Combine(Root,"appearance"));
+  try { File.WriteAllText(Path.Combine(Root,"migrated-from.txt"),source); } catch(IOException) {}
+ }
+ static void CopyDir(string source,string target) {
+  Directory.CreateDirectory(target);
+  foreach(var file in Directory.GetFiles(source,"*",SearchOption.AllDirectories)) {
+   var dest=Path.Combine(target,Path.GetRelativePath(source,file));
+   try { Directory.CreateDirectory(Path.GetDirectoryName(dest)!); if(!File.Exists(dest))File.Copy(file,dest,true); } catch(IOException) {}
+  }
+ }
+ // 把背景图片与音乐文件复制进当前数据目录（一次），并改写设置里的路径。
+ void RelocateAssets() {
+  var appearance=Settings.Appearance;var changed=false;
+  if(appearance.BackgroundImage.Length>0&&File.Exists(appearance.BackgroundImage)&&!IsUnder(Root,appearance.BackgroundImage)) {
+   try { var dir=Path.Combine(Root,"appearance");Directory.CreateDirectory(dir);var dest=Path.Combine(dir,Path.GetFileName(appearance.BackgroundImage));if(!File.Exists(dest))File.Copy(appearance.BackgroundImage,dest,true);appearance.BackgroundImage=dest;changed=true; } catch(IOException) {}
+  }
+  if(appearance.Playlist.Count>0) {
+   for(int i=0;i<appearance.Playlist.Count;i++) {
+    var path=appearance.Playlist[i];
+    if(path.Length==0||!File.Exists(path)||IsUnder(Root,path))continue;
+    try { var dir=Path.Combine(Root,"music");Directory.CreateDirectory(dir);var dest=Path.Combine(dir,Path.GetFileName(path));if(!File.Exists(dest))File.Copy(path,dest,true);if(File.Exists(dest)){appearance.Playlist[i]=dest;changed=true;} } catch(IOException) {}
+   }
+  }
+  if(changed)Save();
+ }
+ static bool IsUnder(string root,string path) {
+  try { var r=Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar)+Path.DirectorySeparatorChar;return Path.GetFullPath(path).StartsWith(r,StringComparison.OrdinalIgnoreCase); } catch { return false; }
+ }
+ // 桌面快捷方式始终指向当前（最新）版本：固定名称，每次启动重写，避免旧版本残留链接。
+ public void EnsureDesktopShortcut() {
+  var desktop=Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+  if(desktop.Length==0)return;
+  WriteShortcut(Path.Combine(desktop,"OCL.lnk"));
+ }
+ // 把快捷方式写到指定路径；--shortcut <path> 也走这里（发布脚本用它更新仓库内的 OCL.lnk）。
+ public void WriteShortcut(string link) {
+  try {
+   var exe=Environment.ProcessPath??Path.Combine(AppContext.BaseDirectory,"PCL-OpenClaw-Launcher.exe");
+   if(!File.Exists(exe))return;
+   if(Path.GetDirectoryName(link) is { Length: >0 } dir)Directory.CreateDirectory(dir);
+   // 已存在的 .lnk 可能因残留的 LinkInfo 导致 Save 失败，先移除再写，保证「始终指向最新版本」。
+   if(File.Exists(link)) { try { File.SetAttributes(link,FileAttributes.Normal); File.Delete(link); } catch(Exception) {} }
+   var shellType=Type.GetTypeFromProgID("WScript.Shell");if(shellType==null)return;
+   dynamic shell=Activator.CreateInstance(shellType)!;
+   dynamic shortcut=shell.CreateShortcut(link);
+   shortcut.TargetPath=exe;shortcut.WorkingDirectory=Path.GetDirectoryName(exe)??AppContext.BaseDirectory;
+   shortcut.IconLocation=exe;shortcut.Description="PCL · OpenClaw Launcher";shortcut.Save();
+  } catch(Exception e) { try { File.AppendAllText(Path.Combine(Root,"shortcut-error.log"),link+"："+e.Message+Environment.NewLine); } catch(IOException) {} }
  }
  public void Save() {
   var file = Path.Combine(Root,"launcher.json"); var temp = file + ".tmp";
@@ -98,10 +174,21 @@ public sealed class Store
   instance.Name=name.Trim(); Save();
  }
  public Instance Duplicate(Instance source,string name) {
-  var clone=new Instance { Name=name.Trim(),Runtime=source.Runtime,Port=Math.Max(1024,Settings.Instances.Max(i=>i.Port)+1),Managed=source.Managed };
+  // 复制出的实例始终是独立受管实例：拥有自己的状态目录与配置，端口/令牌重写以免冲突。
+  var clone=new Instance { Name=name.Trim(),Runtime=source.Runtime,Port=Math.Max(1024,Settings.Instances.Max(i=>i.Port)+1),Managed=true };
   clone.State=Path.Combine(Root,"instances",clone.Id); clone.Config=Path.Combine(clone.State,"openclaw.json");
   Directory.CreateDirectory(clone.State);
-  try { if(File.Exists(source.Config)) File.Copy(source.Config,clone.Config,true); } catch(IOException) {}
+  var sourceConfig=source.Config.Length>0?source.Config:Path.Combine(source.State.Length>0?source.State:Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),".openclaw"),"openclaw.json");
+  try {
+   if(File.Exists(sourceConfig)) {
+    var node=JsonNode.Parse(File.ReadAllText(sourceConfig)) as JsonObject;
+    if(node?["gateway"] is JsonObject gateway) {
+     gateway["port"]=clone.Port;
+     gateway["auth"]=new JsonObject { ["mode"]="token",["token"]=Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32)) };
+    }
+    File.WriteAllText(clone.Config,node?.ToJsonString(new JsonSerializerOptions {WriteIndented=true})??"{}");
+   }
+  } catch(Exception) { try{File.Copy(sourceConfig,clone.Config,true);}catch{} }
   Settings.Instances.Add(clone); Settings.Selected=clone.Id; Save(); return clone;
  }
 }
@@ -154,6 +241,8 @@ public sealed class Runner
   return result;
  }
  public static async Task<CommandResult> Execute(ProcessStartInfo info,int seconds,CancellationToken cancellation=default) {
+  // 不依赖外部调用方与控制台代码页：子进程输出一律按 UTF-8 解码，避免中文路径/参数乱码。
+  info.StandardOutputEncoding??=Encoding.UTF8; info.StandardErrorEncoding??=Encoding.UTF8;
   using var p = new Process {StartInfo=info}; p.Start(); p.StandardInput.Close();
   var stdout=p.StandardOutput.ReadToEndAsync(); var stderr=p.StandardError.ReadToEndAsync();
   using var timeout=CancellationTokenSource.CreateLinkedTokenSource(cancellation); timeout.CancelAfter(TimeSpan.FromSeconds(seconds));

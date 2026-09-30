@@ -8,6 +8,8 @@ namespace ClawLauncher;
 public static class Brand
 {
  public const string Hex="M128,7 L233,67 L233,189 L128,249 L23,189 L23,67 Z";
+ // 单一版本来源：改这里即可，UI 各处统一引用，避免像 0.7.0 那样漏改。
+ public const string Version="0.8.0";
  static DrawingImage? cached;
  public static DrawingImage Image() {
   if(cached!=null)return cached;

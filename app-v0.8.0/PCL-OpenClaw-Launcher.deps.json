@@ -1,0 +1,39 @@
+{
+  "runtimeTarget": {
+    "name": ".NETCoreApp,Version=v10.0",
+    "signature": ""
+  },
+  "compilationOptions": {},
+  "targets": {
+    ".NETCoreApp,Version=v10.0": {
+      "PCL-OpenClaw-Launcher/0.8.0": {
+        "dependencies": {
+          "PclControls": "1.0.0"
+        },
+        "runtime": {
+          "PCL-OpenClaw-Launcher.dll": {}
+        }
+      },
+      "PclControls/1.0.0": {
+        "runtime": {
+          "PclControls.dll": {
+            "assemblyVersion": "1.0.0.0",
+            "fileVersion": "1.0.0.0"
+          }
+        }
+      }
+    }
+  },
+  "libraries": {
+    "PCL-OpenClaw-Launcher/0.8.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "PclControls/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    }
+  }
+}

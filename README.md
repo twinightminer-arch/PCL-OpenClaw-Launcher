@@ -17,6 +17,9 @@
 - **插件管理 / Skills 管理**：列出内置与自定义（extensions 目录）插件与技能，统计数量，支持启用 / 禁用 / 更新 / 卸载，并可一键打开插件或 Skills 目录。
 - **软件连接 / 整合包**：管理外部软件接入与整合包安装。
 - **操作日志**：记录启动器与网关的关键操作。
+- **升级不丢设置（v0.8.0 起）**：用户数据统一放在 `%LOCALAPPDATA%\OCL`，升级/卸载都不丢设置、背景图与歌单；首次运行会自动继承旧版本数据目录，并把背景媒体、音乐复制一份到新目录。
+- **快捷方式始终指向最新版（v0.8.0 起）**：桌面快捷方式固定名为 `OCL.lnk`，每次启动自动重写为当前版本，不会留下指向旧版本的僵尸链接。
+- **打赏入口（v0.8.0）**：「关于」页新增蓝色「打赏 OCL 作者」按钮，点击打开本地打赏页，内含微信 / 支付宝收款码。
 
 ## 目录结构
 
@@ -27,7 +30,10 @@ PCL-OpenClaw-Launcher/
 │   ├── PclControls/          # 由 PCL 移植的 WPF 控件（VB.NET）
 │   ├── Tests/                # 测试项目
 │   └── NuGet.Config
-├── app-v0.2/ ~ app-v0.5/     # 各版本已编译发布（可直接运行）
+├── app-v0.2/ ~ app-v0.8.0/   # 各版本已编译发布（可直接运行）
+├── installers/<版本>/         # 各版本 Inno Setup 安装包
+├── installer/                # 安装脚本（模板 ocl.iss.tmpl、生成器 gen-iss.py、各版本 ocl-*.iss）
+├── plugins/wallpaper-engine/ # OpenClaw 壁纸插件
 ├── build.ps1                 # 构建脚本（需 .NET 10 SDK）
 ├── 使用说明.md                # 使用文档（中文）
 ├── 源码来源.md                # 源码溯源说明
@@ -62,20 +68,33 @@ PCL-OpenClaw-Launcher/
 | v0.5 | `app-v0.5/` |
 | v0.6 | `app-v0.6.0/` |
 | v0.7 | `app-v0.7.0/` |
+| v0.8 | `app-v0.8.0/` |
 
 每个目录均含可直接运行的 `PCL-OpenClaw-Launcher.exe`（随附 `PclControls.dll` 等依赖）。
 
 ### Windows 安装包
 
-使用 [Inno Setup](https://jrsoftware.org/isinfo.php) 按用户级（无需管理员）安装，安装到 `%LOCALAPPDATA%\Programs\OCL-<版本>`：
+使用 [Inno Setup](https://jrsoftware.org/isinfo.php) 按用户级（无需管理员）安装。
+**v0.8.0 起安装目录固定为 `%LOCALAPPDATA%\Programs\OCL`**（不再带版本号），配合固定 AppId，
+新版本会**原地覆盖升级**并自动关闭正在运行的 OCL，不会并存多个安装。
 
 | 版本 | 安装包 |
 | --- | --- |
 | v0.5 | `OCL-0.5.0-Setup.exe` |
 | v0.6 | `OCL-0.6.0-Setup.exe` |
 | v0.7 | `OCL-0.7.0-Setup.exe` |
+| v0.8 | `OCL-0.8.0-Setup.exe` |
 
-安装包只包含可执行文件、依赖与图标资源，**不含**任何个人配置、密钥或源码。脚本见 `installer/ocl.iss.tmpl` 与 `installer/ocl-*.iss`。
+安装包只包含可执行文件、依赖、图标与打赏页资源，**不含**任何个人配置、密钥或源码。脚本见 `installer/ocl.iss.tmpl`（模板）与 `installer/ocl-*.iss`（各版本），生成脚本 `installer/gen-iss.py`。
+
+> **升级约定（0.8.0 起固定）**：固定 AppId `{8E1C3A72-0F5B-4D31-9C10-0A1F2B3C4D70}`、固定 `DefaultDirName={localappdata}\Programs\OCL`、固定快捷方式名 `OCL`。
+> 后续版本不要再改这三项，否则会变成并存安装并留下僵尸快捷方式。
+
+## 打赏
+
+「关于」页的蓝色按钮 **打赏 OCL 作者** 会打开本地页面 `Assets/donate/index.html`，内含作者的微信与支付宝收款码；
+旁边的 **打赏 PCL 原作者** 会跳转 PCL 作者的[爱发电](https://meloong.com/afd/a/LTCat)页面。
+打赏完全自愿，不影响任何功能。
 
 ## OpenClaw 壁纸插件
 
