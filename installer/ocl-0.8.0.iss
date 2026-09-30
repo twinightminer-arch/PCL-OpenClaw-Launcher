@@ -4,6 +4,8 @@
 ; 升级约定（0.8.0 起固定，后续版本不要再改这几项）：
 ;   · AppId 固定不变 → 新版本覆盖安装旧版本，而不是并存。
 ;   · DefaultDirName 固定不带版本号 → 安装目录稳定，升级原地替换。
+;   · UsePreviousAppDir=no → 否则 Inno 会沿用注册表里「上次安装目录」的残留记录，
+;     把新版本装回旧位置（实测曾把 0.8.0 装进开发目录 E:\openclaw\ocl）。
 ;   · 桌面/开始菜单快捷方式名固定 → 升级后自动指向最新版本，不会残留 OCL 0.7.0 之类的旧链接。
 ;   · CloseApplications=yes → 升级时自动关闭正在运行的 OCL，否则 exe 被占用无法替换。
 ;   · 用户数据不在安装目录内（%LOCALAPPDATA%\OCL），卸载或升级都不会丢设置与背景媒体。
@@ -16,6 +18,10 @@ AppPublisher=Twinight_Miner
 AppPublisherURL=https://github.com/twinightminer-arch/PCL-OpenClaw-Launcher
 AppSupportURL=https://github.com/twinightminer-arch/PCL-OpenClaw-Launcher
 DefaultDirName={localappdata}\Programs\OCL
+; 必须显式关掉：默认 yes 会沿用「上次安装目录」的注册表记录，把新版本装回旧位置
+; （本机实测：残留记录指向 E:\openclaw\ocl，导致 0.8.0 装进开发目录而不是 Programs\OCL）。
+; 关掉后默认目录恒为 DefaultDirName，用户仍可在向导里手动改。
+UsePreviousAppDir=no
 DefaultGroupName=OCL
 DisableProgramGroupPage=yes
 AllowNoIcons=yes
