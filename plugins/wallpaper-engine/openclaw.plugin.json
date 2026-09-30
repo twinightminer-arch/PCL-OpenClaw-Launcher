@@ -1,0 +1,46 @@
+{
+  "id": "wallpaper-engine",
+  "name": "Wallpaper Engine",
+  "description": "Browse the local Wallpaper Engine library and switch OpenClaw Control UI image, GIF and video backgrounds.",
+  "version": "0.2.0",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "libraryRoot": {
+        "type": "string",
+        "description": "Wallpaper Engine workshop content directory. Defaults to D:\\steam\\steamapps\\workshop\\content\\431960"
+      },
+      "ffmpegPath": {
+        "type": "string",
+        "description": "Path to ffmpeg.exe used to convert GIF/video previews into still images."
+      },
+      "cacheDir": {
+        "type": "string",
+        "description": "Where converted still frames are cached."
+      },
+      "controlUiRoot": {
+        "type": "string",
+        "description": "Absolute path to the Control UI directory served by this gateway."
+      }
+    },
+    "additionalProperties": false
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "skills": [
+    "./skills/wallpaper"
+  ],
+  "contracts": {
+    "tools": [
+      "wallpaper_list",
+      "wallpaper_search",
+      "wallpaper_info",
+      "wallpaper_ui_set",
+      "wallpaper_ui_config",
+      "wallpaper_ui_off",
+      "wallpaper_ui_status",
+      "wallpaper_desktop_set"
+    ]
+  }
+}

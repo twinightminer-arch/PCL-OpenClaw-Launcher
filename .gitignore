@@ -1,5 +1,11 @@
-# .NET build output (source tree only; release builds under app-v0.x are kept)
 **/bin/
 **/obj/
+**/node_modules/
+**/Data/
+.build/
+work/
 *.user
+*.pdb
 .vs/
+**/ui-error.txt
+**/preview.png

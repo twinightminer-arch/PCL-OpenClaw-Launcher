@@ -159,7 +159,9 @@ public sealed class Runner
   p.Start();p.StandardInput.Close();p.BeginOutputReadLine();p.BeginErrorReadLine();return p;
  }
 }
-public sealed record ItemRow(string Id,string Name,string State,string Detail,string Source="",string Account="",bool Enabled=false);
+public sealed record ItemRow(string Id,string Name,string State,string Detail,string Source="",string Account="",bool Enabled=false) {
+ public string Indicator => State switch { "已连接" or "探测通过" or "已加载" or "壁纸库可用" => "#248B69", "连接异常" or "未连接" or "检测失败" or "加载失败" => "#D9363E", _ when State.Contains("未验证") => "#C58B20", _ => "#999999" };
+}
 public static class ReadModel
 {
  public static string S(JsonNode? node,string key,string fallback="")=>node?[key]?.ToString()??fallback;
@@ -182,10 +184,13 @@ public static class ReadModel
   var accounts=live?["channelAccounts"] as JsonObject;
   var actualLive=gatewayOnline&&B(live,"configOnly")!=true&&B(live,"gatewayReachable")!=false&&accounts!=null;
   var ids=new HashSet<string>(chat?.Select(p=>p.Key)??[]);
+  if(live?["configuredChannels"] is JsonArray configuredIds)foreach(var id in configuredIds)if(id!=null)ids.Add(id.ToString());
   if(accounts!=null)foreach(var p in accounts)ids.Add(p.Key);
   foreach(var id in ids.Order()) {
    var meta=chat?[id];var entries=accounts?[id] as JsonArray;
    var accountEntries=entries?.Where(x=>x!=null).ToList()??[];
+   if(accountEntries.Count==0 && meta is JsonObject && meta["accounts"] is JsonArray configured)
+    foreach(var account in configured)accountEntries.Add(new JsonObject{["accountId"]=account?.ToString()});
    if(accountEntries.Count==0)accountEntries.Add(null);
    foreach(var entry in accountEntries) {
     var installed=B(meta,"installed"); var state="未检测";
@@ -199,12 +204,12 @@ public static class ReadModel
     else if(B(entry?["probe"],"ok")==true)state="探测通过";
     else if(B(entry,"running")==true)state="运行中 · 连接未验证";
     else state="未运行 / 未验证";
-    result.Add(new(id,ChannelName(id),state,SafeLog.Clean(S(entry,"lastError",actualLive?"状态来自网关；探测通过不代表消息已端到端送达。":"网关不可用或未返回运行数据，不能判断在线。")),S(meta,"origin"),S(entry,"accountId"),B(entry,"enabled")==true));
+    result.Add(new(id,S(live?["channelLabels"],id,ChannelName(id)),state,SafeLog.Clean(S(entry,"lastError",actualLive?"状态来自网关；探测通过不代表消息已端到端送达。":"网关不可用或未返回运行数据，不能判断在线。")),S(meta,"origin"),S(entry,"accountId"),B(entry,"enabled")==true));
    }
   }
   foreach(var (name,aliases) in new[]{("微信",new[]{"wechat","weixin","wecom"}),("Telegram",new[]{"telegram"}),("Signal",new[]{"signal"}),("QQ",new[]{"qq","qqbot"}),("邮箱",new[]{"email","mail","gmail","imap","smtp"})})
    if(!result.Any(r=>aliases.Any(a=>r.Id.Contains(a,StringComparison.OrdinalIgnoreCase))))result.Add(new("",name,"未发现渠道适配器","可在插件页安装对应适配器。邮箱也可能通过 Skill / Hook 接入，不能据此判断邮箱本身离线。"));
   return result;
  }
- public static string ChannelName(string id)=>id switch {"telegram"=>"Telegram","signal"=>"Signal","qqbot"=>"QQ", "wechat" or "weixin"=>"微信","wecom"=>"企业微信","email"=>"邮箱",_=>id};
+ public static string ChannelName(string id)=>id switch {"telegram"=>"Telegram","signal"=>"Signal","qqbot"=>"QQ", "wechat" or "weixin" or "openclaw-weixin"=>"微信","wecom"=>"企业微信","email"=>"邮箱",_=>id};
 }

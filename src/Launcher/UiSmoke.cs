@@ -21,6 +21,10 @@ public sealed partial class MainWindow
   Directory.CreateDirectory(directory);var checks=new List<string>();
   void Capture(string name){UpdateLayout();var bitmap=new RenderTargetBitmap((int)ActualWidth,(int)ActualHeight,96,96,PixelFormats.Pbgra32);bitmap.Render(this);var encoder=new PngBitmapEncoder();encoder.Frames.Add(BitmapFrame.Create(bitmap));using var file=File.Create(Path.Combine(directory,name+".png"));encoder.Save(file);}
   foreach(var name in new[]{"启动总览","版本下载","版本与实例","插件管理","Skills 管理","软件连接","整合包","操作日志","设置与关于","个性化","背景音乐","关于"}) {CapturePage(name);await Task.Delay(40);Capture(name);checks.Add("PASS page: "+name);}
+  channels=[new("telegram","Telegram","已连接","网关报告连接已建立。",Account:"default"),new("signal","Signal","未连接","连接未建立。"),new("email","邮箱","运行中 · 连接未验证","适配器运行中，尚未返回探测结果。")];
+  CapturePage("软件连接");await Task.Delay(40);Capture("应用连接区域");checks.Add("PASS populated per-application cards with green, red and amber indicators");
+  var pair=(System.Windows.Controls.StackPanel)BrandPair(68,20);var left=(System.Windows.Controls.Image)pair.Children[0];var right=(System.Windows.Controls.Image)pair.Children[1];
+  if(left.Width!=right.Width||left.Height!=right.Height||left.Width!=left.Height)throw new Exception("Brand dimensions differ");checks.Add("PASS equal square brand images in a horizontal pair");
   var savedSplash=store.Settings.Appearance.Splash;store.Settings.Appearance.Splash=true;
   ShowSplashFrame();Capture("开场动画");await PlayOpening();store.Settings.Appearance.Splash=savedSplash;if(splash.Visibility!=Visibility.Collapsed)throw new Exception("开场动画未正常退出。");checks.Add("PASS animated opening completes");
   var savedImage=store.Settings.Appearance.BackgroundImage;var savedOpacity=store.Settings.Appearance.CardOpacity;
