@@ -87,8 +87,9 @@ PCL-OpenClaw-Launcher/
 
 安装包只包含可执行文件、依赖、图标与打赏页资源，**不含**任何个人配置、密钥或源码。脚本见 `installer/ocl.iss.tmpl`（模板）与 `installer/ocl-*.iss`（各版本），生成脚本 `installer/gen-iss.py`。
 
-> **升级约定（0.8.0 起固定）**：固定 AppId `{8E1C3A72-0F5B-4D31-9C10-0A1F2B3C4D70}`、固定 `DefaultDirName={localappdata}\Programs\OCL`、固定快捷方式名 `OCL`。
-> 后续版本不要再改这三项，否则会变成并存安装并留下僵尸快捷方式。
+> **升级约定（0.8.0 起固定）**：固定 AppId `{8E1C3A72-0F5B-4D31-9C10-0A1F2B3C4D70}`、固定 `DefaultDirName={localappdata}\Programs\OCL`、固定快捷方式名 `OCL`、**`UsePreviousAppDir=no`**。
+> 后续版本不要再改这几项，否则会变成并存安装并留下僵尸快捷方式。
+> ⚠️ `UsePreviousAppDir` 若保持默认 `yes`，Inno 会沿用注册表里「上次安装目录」的残留记录，把新版本装回任意旧位置（实测曾把 0.8.0 装进开发目录而不是 `Programs\OCL`）。
 
 ## 打赏
 
