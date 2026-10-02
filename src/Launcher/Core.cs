@@ -383,7 +383,8 @@ public static class ReadModel
    var missing=n?["missing"] as JsonObject;var detail=new List<string>();
    if(missing!=null)foreach(var pair in missing)if(pair.Value is JsonArray a&&a.Count>0)detail.Add(pair.Key+": "+string.Join(", ",a.Select(v=>v?.ToString())));
    var status=B(n,"disabled")==true?"已禁用":B(n,"blockedByAllowlist")==true?"白名单阻止":B(n,"blockedByAgentFilter")==true?"Agent 未采用":B(n,"eligible")==true?"依赖就绪":"缺少依赖";
-   return new ItemRow(S(n,"name"),S(n,"name"),status,detail.Count>0?string.Join("；",detail):S(n,"description"),S(n,"source"),Enabled:B(n,"disabled")!=true);
+   // baseDir = 技能所在目录：独立 Skill（工作区/共享目录）可据此删除；插件附带与内置的只能禁用。
+   return new ItemRow(S(n,"name"),S(n,"name"),status,detail.Count>0?string.Join("；",detail):S(n,"description"),S(n,"source"),Enabled:B(n,"disabled")!=true,RootDir:S(n,"baseDir"));
   }).ToList();
  }
  public static List<ItemRow> Channels(JsonNode? catalog,JsonNode? live,bool gatewayOnline) {

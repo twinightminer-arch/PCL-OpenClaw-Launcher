@@ -30,6 +30,11 @@
 - **插件管理重做为横向条目（v0.8.4）**：参照 PCL 的「实例 Mod 管理」，每个插件一行——左侧状态指示灯（绿=启用 / 灰=禁用 / 红=异常）、中间名称与「状态 · 来源」，右侧开关与删除按钮，不再用竖排卡片。
 - **插件开关 / 删除真正写入（v0.8.4）**：开关直接调用 `openclaw plugins enable|disable <id>` 并写回实例配置 `plugins.entries.<id>.enabled`；删除先由 OpenClaw 卸载，若插件仍在列表中（手动放入的插件没有安装记录，或全局扩展被再次发现），按 `plugins list` 报告的 `rootDir` 兜底移除目录——普通目录移入启动器回收目录 `removed-plugins/` 可手动移回，目录连接点只删链接不会误删源目录——并清理配置条目。
 - **修复「共 0 个」误导（v0.8.4）**：进入插件 / 实例设置页时若列表尚未加载会自动拉取，加载期间显示「正在加载插件列表…」而不是空白的「共 0 个」；同时避免导航时重复刷新导致列表反复抖动。
+- **Skill 管理并入同一套横向条目（v0.8.5）**：参照 PCL「资源包管理」，Skill 与插件共用同一种行版式——指示灯 + 名称/状态/来源 ‖ 开关 + 删除；「Skill 库」与「实例设置 → Skill（本实例）」两处都是横排。
+- **Skill 删除边界明确（v0.8.5）**：独立安装的 Skill（工作区 `workspace/skills` 或共享 `skills` 目录）删除时移入启动器回收目录 `removed-skills/` 可手动移回；内置、插件附带、链接目录会给出明确原因并引导用开关禁用或去卸载所属插件。
+- **实例独立性自检（v0.8.5）**：「实例设置 → 实例独立性」可一键逐个实例查询插件 / Skill 数量与状态目录；若有两个实例共用同一状态目录会直接告警（这种情况插件与 Skill 会互相影响）。
+- **一键从其他实例导入实例设置（v0.8.5）**：同一入口可选来源实例，把它的插件启停与插件配置、Skill 启停导入当前实例，并按来源记录补装缺少的插件；端口、令牌与账号凭据不会被复制。
+- **安装目录改到 E 盘（v0.8.5）**：安装脚本 `DefaultDirName` 由 `%LOCALAPPDATA%\Programs\OCL` 改为 `E:\OCL`，不再往 C 盘塞程序文件（用户数据仍在 `%LOCALAPPDATA%\OCL`）。
 
 ## 目录结构
 
@@ -40,7 +45,7 @@ PCL-OpenClaw-Launcher/
 │   ├── PclControls/          # 由 PCL 移植的 WPF 控件（VB.NET）
 │   ├── Tests/                # 测试项目
 │   └── NuGet.Config
-├── app-v0.2/ ~ app-v0.8.4/   # 各版本已编译发布（可直接运行）
+├── app-v0.2/ ~ app-v0.8.5/   # 各版本已编译发布（可直接运行）
 ├── installers/<版本>/         # 各版本 Inno Setup 安装包
 ├── installer/                # 安装脚本（模板 ocl.iss.tmpl、生成器 gen-iss.py、各版本 ocl-*.iss）
 ├── plugins/wallpaper-engine/ # OpenClaw 壁纸插件
@@ -83,13 +88,14 @@ PCL-OpenClaw-Launcher/
 | v0.8.2 | `app-v0.8.2/` |
 | v0.8.3 | `app-v0.8.3/` |
 | v0.8.4 | `app-v0.8.4/` |
+| v0.8.5 | `app-v0.8.5/` |
 
 每个目录均含可直接运行的 `PCL-OpenClaw-Launcher.exe`（随附 `PclControls.dll` 等依赖）。
 
 ### Windows 安装包
 
 使用 [Inno Setup](https://jrsoftware.org/isinfo.php) 按用户级（无需管理员）安装。
-**v0.8.0 起安装目录固定为 `%LOCALAPPDATA%\Programs\OCL`**（不再带版本号），配合固定 AppId，
+**v0.8.0–v0.8.4 安装目录为 `%LOCALAPPDATA%\Programs\OCL`；v0.8.5 起改为 `E:\OCL`**（不再带版本号），配合固定 AppId，
 新版本会**原地覆盖升级**并自动关闭正在运行的 OCL，不会并存多个安装。
 
 | 版本 | 安装包 |
@@ -102,6 +108,7 @@ PCL-OpenClaw-Launcher/
 | v0.8.2 | `OCL-0.8.2-Setup.exe` |
 | v0.8.3 | `OCL-0.8.3-Setup.exe` |
 | v0.8.4 | `OCL-0.8.4-Setup.exe` |
+| v0.8.5 | `OCL-0.8.5-Setup.exe` |
 
 安装包只包含可执行文件、依赖、图标与打赏页资源，**不含**任何个人配置、密钥或源码。脚本见 `installer/ocl.iss.tmpl`（模板）与 `installer/ocl-*.iss`（各版本），生成脚本 `installer/gen-iss.py`。
 

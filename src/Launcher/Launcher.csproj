@@ -1,5 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup><OutputType>WinExe</OutputType><TargetFramework>net10.0-windows</TargetFramework><UseWPF>true</UseWPF><Nullable>enable</Nullable><ImplicitUsings>enable</ImplicitUsings><AssemblyName>PCL-OpenClaw-Launcher</AssemblyName><Version>0.8.4</Version><ApplicationIcon Condition="Exists('Assets/ocl.ico')">Assets/ocl.ico</ApplicationIcon></PropertyGroup>
+  <PropertyGroup><OutputType>WinExe</OutputType><TargetFramework>net10.0-windows</TargetFramework><UseWPF>true</UseWPF><Nullable>enable</Nullable><ImplicitUsings>enable</ImplicitUsings><AssemblyName>PCL-OpenClaw-Launcher</AssemblyName><Version>0.8.5</Version><ApplicationIcon Condition="Exists('Assets/ocl.ico')">Assets/ocl.ico</ApplicationIcon></PropertyGroup>
   <ItemGroup><Content Include="Assets/*" CopyToOutputDirectory="PreserveNewest"/><Content Include="Assets/donate/*" CopyToOutputDirectory="PreserveNewest"/></ItemGroup>
   <ItemGroup><ProjectReference Include="../PclControls/PclControls.vbproj"/></ItemGroup>
 </Project>

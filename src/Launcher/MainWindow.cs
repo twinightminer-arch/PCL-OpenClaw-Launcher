@@ -251,6 +251,32 @@ public sealed partial class MainWindow : Window
   Grid.SetColumn(actions,2);grid.Children.Add(actions);
   return new Border{CornerRadius=new CornerRadius(4),BorderThickness=new Thickness(1),BorderBrush=Brush("#ECECEC"),Background=Brush("#FBFBFB"),Padding=new Thickness(10,7,10,7),Margin=new Thickness(0,0,0,5),Child=grid};
  }
+ // PCL「资源包管理」风格横向行（0.8.5）：与插件行同一套版式——指示灯 + 名称/状态/来源 ‖ 开关 + 删除。
+ UIElement SkillRow(ItemRow row) {
+  var grid=new Grid();
+  grid.ColumnDefinitions.Add(new(){Width=new GridLength(20)});
+  grid.ColumnDefinitions.Add(new(){Width=new GridLength(1,GridUnitType.Star)});
+  grid.ColumnDefinitions.Add(new(){Width=GridLength.Auto});
+  var light=new System.Windows.Shapes.Ellipse{Width=9,Height=9,Fill=Brush(row.Indicator),VerticalAlignment=VerticalAlignment.Center,ToolTip=row.State};
+  Grid.SetColumn(light,0);grid.Children.Add(light);
+  var info=new StackPanel{VerticalAlignment=VerticalAlignment.Center};
+  var name=new TextBlock{Text=row.Name,FontSize=13,Foreground=Brush("#333333"),VerticalAlignment=VerticalAlignment.Center};
+  var meta=new TextBlock{Text=row.State+(row.Source.Length>0?"  ·  "+row.Source:""),FontSize=11,Foreground=Brush(row.Indicator),Margin=new Thickness(0,2,0,0)};
+  info.Children.Add(name);info.Children.Add(meta);
+  if(row.Detail.Length>0)info.ToolTip=SafeLog.Clean(row.Detail);
+  Grid.SetColumn(info,1);grid.Children.Add(info);
+  var actions=new StackPanel{Orientation=Orientation.Horizontal,VerticalAlignment=VerticalAlignment.Center};
+  // 开关：写实例配置 skills.entries.<key>.enabled（已实测写入生效，网关需重启后应用）。
+  actions.Children.Add(SwitchWithLabel(row.Enabled,enabled=>_ = Operate(async()=>{
+   await SetSkill(row.Id,enabled);
+   AddLog("Skill "+row.Name+" 已"+(enabled?"启用":"禁用")+"并写入配置；如网关正在运行，需重启网关后生效。");
+   await Refresh();
+  })));
+  var del=Button("删除",()=>_ = Operate(()=>UninstallSkill(row)));del.Margin=new Thickness(12,0,0,0);
+  actions.Children.Add(del);
+  Grid.SetColumn(actions,2);grid.Children.Add(actions);
+  return new Border{CornerRadius=new CornerRadius(4),BorderThickness=new Thickness(1),BorderBrush=Brush("#ECECEC"),Background=Brush("#FBFBFB"),Padding=new Thickness(10,7,10,7),Margin=new Thickness(0,0,0,5),Child=grid};
+ }
  // 卸载插件：先让 OpenClaw 卸载（对 plugins install 装进来的有效）；
  // 失败则兜底——手动放入/全局扩展没有安装记录，OpenClaw 会拒绝，这里直接移除目录并清理配置。
  async Task UninstallPlugin(ItemRow row) {
@@ -311,7 +337,7 @@ public sealed partial class MainWindow : Window
    return skills.Where(r=>(q.Length==0||(r.Name+" "+r.State+" "+r.Source+" "+r.Detail).Contains(q,StringComparison.OrdinalIgnoreCase)))
     .Where(r=>s==0||(s==1&&r.Enabled)||(s==2&&!r.Enabled)||(s==3&&r.Source.Contains("bundled"))||(s==4&&r.Source is not "" && !r.Source.Contains("bundled"))).ToList();
   }
-  void Render(){panel.Children.Clear();var rows=Filtered();foreach(var r in rows)panel.Children.Add(SkillCard(r));if(rows.Count==0)panel.Children.Add(Toolbar(Text(skills.Count==0?"尚未加载列表：请点击右上角 ↻ 刷新，或稍候自动刷新。":"没有匹配的 Skill。",12)));}
+  void Render(){panel.Children.Clear();var rows=Filtered();foreach(var r in rows)panel.Children.Add(SkillRow(r));if(rows.Count==0)panel.Children.Add(Toolbar(Text(skills.Count==0?(refreshCancellation!=null?"正在加载 Skill 列表；首次扫描可能需要 1–2 分钟…":"尚未加载列表：请点击右上角 ↻ 刷新，或稍候自动刷新。"):"没有匹配的 Skill。",12)));}
   filterBox.TextChanged+=(_,_)=>Render();scope.SelectionChanged+=(_,_)=>Render();
   body.Children.Add(Row(Button("打开 Skills 目录",OpenSkillsFolder),AsyncButton("依赖检查",async()=>{await Execute("skills","check");SelectPage("操作日志");}),AsyncButton("更新已跟踪 Skills",async()=>{if(Confirm("更新当前实例中由 ClawHub 跟踪的 Skills？")){await Execute("skills","update","--all");await Refresh();}})));
   Render();
@@ -320,30 +346,34 @@ public sealed partial class MainWindow : Window
    if(string.IsNullOrWhiteSpace(spec.Text))throw new Exception("请填写 Skill 来源。");if(!Confirm("安装 Skill：\n"+spec.Text))return;await Execute("skills","install",spec.Text.Trim());await Refresh();
   },true),Button("本地目录",()=>{var dialog=new OpenFolderDialog();if(dialog.ShowDialog(this)==true)spec.Text=dialog.FolderName;}))));
  }
- UIElement SkillCard(ItemRow row) {
-  var name=Text(row.Name,15,"#333333");
-  var meta=new StackPanel{Orientation=Orientation.Horizontal};
-  meta.Children.Add(new System.Windows.Shapes.Ellipse{Width=9,Height=9,Fill=Brush(row.Indicator),Margin=new Thickness(0,0,6,0),VerticalAlignment=VerticalAlignment.Center});
-  meta.Children.Add(Text(row.State+(row.Source.Length>0?"  ·  "+row.Source:""),12,row.Indicator));
-  var toggle=SwitchWithLabel(row.Enabled,enabled=>_ = Operate(async()=>{await SetSkill(row.Id,enabled);await Refresh();}));
-  var del=Button("删除",()=>_ = Operate(async()=>{await UninstallSkill(row);}));
-  return Card("",name,meta,Row(toggle,del),Text(row.Detail.Length>0?row.Detail:"（无描述）",11,"#999999"));
- }
  async Task SetSkill(string name,bool enabled) {
   var info=await Json("skills","info",name,"--json");if(info["error"]!=null)throw new Exception(info["error"]!.ToString());
   var key=ReadModel.S(info,"skillKey",name);
   await Execute("config","set","skills.entries["+JsonSerializer.Serialize(key)+"].enabled",enabled?"true":"false","--strict-json");
  }
+ // 删除 Skill：只允许删除「独立安装」的 Skill（工作区 skills 目录或共享 managed skills 目录）；
+ // 内置、插件附带、个人 agent 目录或链接目录都会明确拒绝——这类请用开关禁用，或去卸载所属插件。
  async Task UninstallSkill(ItemRow row) {
   var info=await Json("skills","info",row.Id,"--json");
-  if(ReadModel.B(info,"bundled")==true||ReadModel.S(info,"source").Contains("plugin"))throw new Exception("内置或插件附带的 Skill 请使用禁用，或卸载所属插件。");
-  var path=ReadModel.S(info,"filePath");if(!File.Exists(path))throw new Exception("未找到 Skill 文件。");
-  var list=await Json("skills","list","--json");var dir=Path.GetDirectoryName(Path.GetFullPath(path))!;
-  var roots=new[]{ReadModel.S(list,"managedSkillsDir"),Path.Combine(ReadModel.S(list,"workspaceDir"),"skills")};
-  if(!roots.Any(root=>!string.IsNullOrWhiteSpace(root)&&string.Equals(Path.GetDirectoryName(dir),Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar),StringComparison.OrdinalIgnoreCase)))throw new Exception("只允许卸载工作区或共享 Skills 目录下的独立 Skill；其他来源请禁用。");
-  if((File.GetAttributes(dir)&FileAttributes.ReparsePoint)!=0)throw new Exception("该 Skill 是链接，请在来源处管理或使用禁用。");
-  if(!Confirm("将 Skill 移到启动器的回收目录：\n"+dir+"\n可手动移回原目录恢复。"))return;
-  var trash=Path.Combine(store.Root,"removed-skills",DateTime.Now.ToString("yyyyMMdd-HHmmss")+"-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(Path.GetDirectoryName(trash)!);Directory.Move(dir,trash);AddLog("Skill 已移到 "+trash+"；原位置 "+dir);await Refresh();
+  if(info["error"]!=null)throw new Exception(info["error"]!.ToString());
+  var source=ReadModel.S(info,"source",row.Source);
+  var path=ReadModel.S(info,"filePath");
+  var dir=row.RootDir.Length>0?row.RootDir:(path.Length>0?Path.GetDirectoryName(Path.GetFullPath(path))??"":"");
+  if(ReadModel.B(info,"bundled")==true||source=="openclaw-bundled")throw new Exception("内置 Skill 随 OpenClaw 更新，不能删除；不需要就点开关「禁用」。");
+  if(source=="openclaw-extra")throw new Exception("「"+row.Name+"」由插件提供，请在上面的「插件（本实例）」里禁用或删除所属插件。");
+  if(dir.Length==0||!Directory.Exists(dir))throw new Exception("没有定位到 Skill 目录，无法删除；可改用开关禁用。");
+  var list=await Json("skills","list","--json");
+  var full=Path.GetFullPath(dir).TrimEnd(Path.DirectorySeparatorChar);
+  var roots=new[]{ReadModel.S(list,"managedSkillsDir"),Path.Combine(ReadModel.S(list,"workspaceDir"),"skills")}
+   .Where(r=>!string.IsNullOrWhiteSpace(r)).Select(r=>Path.GetFullPath(r).TrimEnd(Path.DirectorySeparatorChar)).ToList();
+  if(!roots.Any(r=>string.Equals(full,r,StringComparison.OrdinalIgnoreCase)))throw new Exception("只允许删除工作区或共享 Skills 目录下的独立 Skill（当前来源："+source+"）；其余请用开关禁用。");
+  if((File.GetAttributes(dir)&FileAttributes.ReparsePoint)!=0)throw new Exception("该 Skill 是链接目录，请在来源处管理或用开关禁用。");
+  if(!Confirm("将 Skill「"+row.Name+"」移到启动器回收目录：\n"+dir+"\n可手动移回原目录恢复。"))return;
+  var trash=Path.Combine(store.Root,"removed-skills",DateTime.Now.ToString("yyyyMMdd-HHmmss")+"-"+row.Id);
+  Directory.CreateDirectory(Path.GetDirectoryName(trash)!);Directory.Move(dir,trash);
+  AddLog("Skill 已移到 "+trash+"（可手动移回恢复）；原位置 "+dir);
+  await Refresh();
+  if(skills.Any(s=>s.Id==row.Id))AddLog("Skill 仍在列表中：若它同时被插件或内置目录提供，请在插件里禁用。");
  }
  void ChannelPage() {
   pageTitle.Text="软件连接";
@@ -467,12 +497,17 @@ public sealed partial class MainWindow : Window
   var pluginPanel=new StackPanel();body.Children.Add(pluginPanel);
   void RenderPlugins(){pluginPanel.Children.Clear();var q=pluginFilter.Text.Trim();var rows=plugins.Where(r=>q.Length==0||(r.Name+" "+r.State+" "+r.Source+" "+r.Detail).Contains(q,StringComparison.OrdinalIgnoreCase)).ToList();foreach(var r in rows)pluginPanel.Children.Add(PluginRow(r));if(rows.Count==0)pluginPanel.Children.Add(Toolbar(Text(plugins.Count==0?(loading?"正在加载插件列表；首次扫描可能需要 1–2 分钟…":"尚未加载：点击「↻ 刷新」加载本实例的插件。"):"没有匹配的插件。",12)));}
   pluginFilter.TextChanged+=(_,_)=>RenderPlugins();RenderPlugins();
-  // —— Skill（本实例）：仿 PCL「资源包」管理 ——
-  body.Children.Add(Card("Skill（本实例）",Text("共 "+skills.Count+" 个。启用、禁用、删除只作用于「"+current.Name+"」。",12),Row(Button("打开 Skills 目录",OpenSkillsFolder),Button("Skill 库",()=>Navigate("Skills 管理"),true))));
+  // —— Skill（本实例）：仿 PCL「资源包」管理，与插件同一套横向条目 ——
+  // 同样做进页自动加载，避免显示成误导性的「共 0 个」。
+  if(skills.Count==0&&!busy&&refreshCancellation==null)_ = Refresh();
+  var skillLoading=refreshCancellation!=null||skills.Count==0;
+  body.Children.Add(Card("Skill（本实例）",Text(skillLoading?"正在加载 Skill 列表…":"共 "+skills.Count+" 个 · 内置 "+skills.Count(s=>s.Source.Contains("bundled"))+" · 外部/自定义 "+skills.Count(s=>s.Source is not "" && !s.Source.Contains("bundled"))+"。启用、禁用、删除只作用于「"+current.Name+"」。",12),Row(Button("打开 Skills 目录",OpenSkillsFolder),Button("Skill 库",()=>Navigate("Skills 管理"),true))));
   var skillFilter=Input("",340);skillFilter.ToolTip="按名称、状态或来源筛选";body.Children.Add(Toolbar(Label("筛选"),skillFilter));
   var skillPanel=new StackPanel();body.Children.Add(skillPanel);
-  void RenderSkills(){skillPanel.Children.Clear();var q=skillFilter.Text.Trim();var rows=skills.Where(r=>q.Length==0||(r.Name+" "+r.State+" "+r.Source+" "+r.Detail).Contains(q,StringComparison.OrdinalIgnoreCase)).ToList();foreach(var r in rows)skillPanel.Children.Add(SkillCard(r));if(rows.Count==0)skillPanel.Children.Add(Toolbar(Text(skills.Count==0?"尚未加载：点击「↻ 刷新」加载本实例的 Skill。":"没有匹配的 Skill。",12)));}
+  void RenderSkills(){skillPanel.Children.Clear();var q=skillFilter.Text.Trim();var rows=skills.Where(r=>q.Length==0||(r.Name+" "+r.State+" "+r.Source+" "+r.Detail).Contains(q,StringComparison.OrdinalIgnoreCase)).ToList();foreach(var r in rows)skillPanel.Children.Add(SkillRow(r));if(rows.Count==0)skillPanel.Children.Add(Toolbar(Text(skills.Count==0?(refreshCancellation!=null?"正在加载 Skill 列表…":"尚未加载：点击上方「↻ 刷新」重新加载本实例的 Skill。"):"没有匹配的 Skill。",12)));}
   skillFilter.TextChanged+=(_,_)=>RenderSkills();RenderSkills();
+  // —— 实例独立性：每个实例用自己的状态目录与配置，插件/Skill 不互相继承 ——
+  body.Children.Add(Card("实例独立性",Text("本实例状态目录："+InstanceStateRoot()+"\n插件与 Skill 只从这里与实例配置加载，切换实例即换一套，不会继承其他实例的内容。",12),Row(AsyncButton("检查各实例是否独立",CheckInstanceIsolation),AsyncButton("从其他实例导入设置",ImportInstanceSettings,true))));
   // —— 整合包（本实例）——
   body.Children.Add(Card("整合包（本实例）",Text("导出本实例的版本、插件与 Skill 启停清单；导入时创建独立实例逐项安装。账号凭据不随整合包导出。",12),Row(AsyncButton("导出 .clawpack.json",ExportPack,true),AsyncButton("选择并预览整合包",ImportPack))));
   body.Children.Add(Card("新实例默认插件集",Text("下载/创建新实例时只携带这里的“必要插件”，其余由用户自行安装或制作。以当前实例为模板采集最省事。"),Row(AsyncButton("照搬当前实例",CaptureDefaultPlugins,true),Button("清空默认集",()=>{store.Settings.DefaultPlugins=[];store.Save();SelectPage(page);})),Text(store.Settings.DefaultPlugins.Count==0?"尚未采集默认插件集：新实例将不携带任何插件。":"已采集 "+store.Settings.DefaultPlugins.Count+" 个默认插件："+string.Join("、",store.Settings.DefaultPlugins.Take(8))+(store.Settings.DefaultPlugins.Count>8?" …":""),11,"#999999")));
@@ -481,6 +516,84 @@ public sealed partial class MainWindow : Window
    RuntimeInstall.ResolveExecutable(node.Text.Trim());if(config.Text.Length>0&&!File.Exists(config.Text))throw new Exception("配置文件不存在。");if(state.Text.Length>0&&!Directory.Exists(state.Text))throw new Exception("状态目录不存在。");
    store.Settings.Node=node.Text.Trim();runner.Node=store.Settings.Node;current.State=state.Text.Trim();current.Config=config.Text.Trim();store.Save();gateway=null;checkedAt=null;AddLog("设置已保存。");
   }),Button("打开配置向导",()=>OpenWizard(["configure"])),AsyncButton("验证配置",async()=>{await Execute("config","validate");MessageBox.Show(this,"配置验证通过。","检查完成");}))));
+ }
+ // 逐实例查询插件/Skill 数量并检查状态目录：共用同一状态目录的实例会互相影响，这里明确报出来。
+ async Task CheckInstanceIsolation() {
+  var lines=new List<string>();
+  var byRoot=new Dictionary<string,List<string>>(StringComparer.OrdinalIgnoreCase);
+  foreach(var instance in store.Settings.Instances.ToList()) {
+   var root=instance.State.Length>0?instance.State:Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),".openclaw");
+   var note=instance==current?"（当前）":"";
+   string pluginsText="查询失败",skillsText="查询失败";
+   try {
+    var p=await runner.Run(instance,["plugins","list","--json"],150,cancellation?.Token??default);
+    pluginsText=p.Ok&&p.Json() is JsonNode pn?ReadModel.Plugins(pn).Count+" 个":"失败："+SafeLog.Clean(p.Summary);
+   } catch(Exception e){pluginsText="失败："+SafeLog.Clean(e.Message);}
+   try {
+    var s=await runner.Run(instance,["skills","list","--json"],150,cancellation?.Token??default);
+    skillsText=s.Ok&&s.Json() is JsonNode sn?ReadModel.Skills(sn).Count+" 个":"失败："+SafeLog.Clean(s.Summary);
+   } catch(Exception e){skillsText="失败："+SafeLog.Clean(e.Message);}
+   lines.Add(instance.Name+note+"：插件 "+pluginsText+" · Skill "+skillsText+"\n    状态目录 "+root);
+   if(!byRoot.TryGetValue(root,out var names))byRoot[root]=names=new List<string>();
+   names.Add(instance.Name);
+  }
+  var shared=byRoot.Where(p=>p.Value.Count>1).ToList();
+  lines.Add(shared.Count==0?"\n结论：每个实例使用各自的状态目录，插件与 Skill 互不继承。":"\n⚠ 以下状态目录被多个实例共用，插件与 Skill 会互相影响：\n"+string.Join("\n",shared.Select(p=>"  "+p.Key+" → "+string.Join("、",p.Value))));
+  var report=string.Join("\n",lines);
+  AddLog("实例独立性检查：\n"+report);
+  MessageBox.Show(this,report,"实例独立性检查");
+ }
+ // 一键把其他实例的插件/Skill 启停与配置导入当前实例；端口、令牌与账号凭据不复制。
+ async Task ImportInstanceSettings() {
+  var others=store.Settings.Instances.Where(i=>i!=current).ToList();
+  if(others.Count==0)throw new Exception("当前只有一个实例，没有其他实例可导入。");
+  string ConfigPathOf(Instance i)=>i.Config.Length>0?i.Config:Path.Combine(i.State.Length>0?i.State:Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),".openclaw"),"openclaw.json");
+  var dialog=new Window{Owner=this,Title="从其他实例导入设置",Width=580,Height=330,WindowStartupLocation=WindowStartupLocation.CenterOwner};
+  var dock=new DockPanel{Margin=new Thickness(20)};
+  var ok=Button("导入到「"+current.Name+"」",()=>dialog.DialogResult=true,true);DockPanel.SetDock(ok,Dock.Bottom);dock.Children.Add(ok);
+  var stack=new StackPanel();
+  var combo=new ComboBox{ItemsSource=others.Select(i=>i.Name).ToList(),SelectedIndex=0,Margin=new Thickness(0,0,0,10)};
+  var copyPlugins=new CheckBox{Content="插件启停与插件配置",IsChecked=true,Margin=new Thickness(0,0,0,6)};
+  var copySkills=new CheckBox{Content="Skill 启停",IsChecked=true,Margin=new Thickness(0,0,0,6)};
+  var installMissing=new CheckBox{Content="按来源记录补装本实例缺少的插件",IsChecked=false,Margin=new Thickness(0,0,0,6)};
+  stack.Children.Add(Text("选择来源实例：",12));stack.Children.Add(combo);
+  stack.Children.Add(Text("导入内容（端口、令牌与账号凭据不会被复制）：",12));
+  stack.Children.Add(copyPlugins);stack.Children.Add(copySkills);stack.Children.Add(installMissing);
+  dock.Children.Add(stack);dialog.Content=dock;
+  if(dialog.ShowDialog()!=true)return;
+  var source=others[Math.Max(0,combo.SelectedIndex)];
+  var srcPath=ConfigPathOf(source);
+  if(!File.Exists(srcPath))throw new Exception("来源实例的配置文件不存在："+srcPath);
+  var dstPath=ConfigPathOf(current);
+  var src=JsonNode.Parse(File.ReadAllText(srcPath)) as JsonObject??throw new Exception("来源配置无法解析。");
+  var dst=File.Exists(dstPath)?(JsonNode.Parse(File.ReadAllText(dstPath)) as JsonObject??new JsonObject()):new JsonObject();
+  Directory.CreateDirectory(Path.GetDirectoryName(dstPath)!);
+  int pluginCount=0,skillCount=0;
+  if(copyPlugins.IsChecked==true&&(src["plugins"] as JsonObject)?["entries"] is JsonObject srcEntries) {
+   var dstPlugins=dst["plugins"] as JsonObject??new JsonObject();
+   var dstEntries=dstPlugins["entries"] as JsonObject??new JsonObject();
+   foreach(var pair in srcEntries)if(pair.Value is JsonNode node){dstEntries[pair.Key]=node.DeepClone();pluginCount++;}
+   dstPlugins["entries"]=dstEntries;dst["plugins"]=dstPlugins;
+  }
+  if(copySkills.IsChecked==true&&(src["skills"] as JsonObject)?["entries"] is JsonObject srcSkills) {
+   var dstSkills=dst["skills"] as JsonObject??new JsonObject();
+   var dstSkillEntries=dstSkills["entries"] as JsonObject??new JsonObject();
+   foreach(var pair in srcSkills)if(pair.Value is JsonNode node){dstSkillEntries[pair.Key]=node.DeepClone();skillCount++;}
+   dstSkills["entries"]=dstSkillEntries;dst["skills"]=dstSkills;
+  }
+  File.WriteAllText(dstPath,dst.ToJsonString(new JsonSerializerOptions{WriteIndented=true}));
+  AddLog("已从实例「"+source.Name+"」导入设置：插件项 "+pluginCount+" · Skill 项 "+skillCount+" → "+dstPath);
+  var failures=new List<string>();
+  if(installMissing.IsChecked==true&&(src["plugins"] as JsonObject)?["installs"] is JsonObject installs) {
+   var have=(await Json("plugins","list","--json"))["plugins"] as JsonArray??new JsonArray();
+   var ids=have.Select(p=>ReadModel.S(p,"id")).ToHashSet(StringComparer.OrdinalIgnoreCase);
+   foreach(var pair in installs) {
+    var spec=ReadModel.S(pair.Value,"spec");if(spec.Length==0||ids.Contains(pair.Key))continue;
+    try {await Execute("plugins","install",spec,"--force");} catch(Exception e){failures.Add(pair.Key+"："+SafeLog.Clean(e.Message));}
+   }
+  }
+  await Refresh();
+  MessageBox.Show(this,"已导入插件项 "+pluginCount+" 个、Skill 项 "+skillCount+" 个。"+(failures.Count>0?"\n补装失败："+string.Join("；",failures):"")+"\n如网关正在运行，需重启网关后生效。","导入完成");
  }
  static void OpenLink(string url)=>Process.Start(new ProcessStartInfo(url){UseShellExecute=true});
  void OpenDonate() {
