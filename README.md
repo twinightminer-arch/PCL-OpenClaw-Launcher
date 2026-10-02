@@ -37,7 +37,7 @@ PCL-OpenClaw-Launcher/
 │   ├── PclControls/          # 由 PCL 移植的 WPF 控件（VB.NET）
 │   ├── Tests/                # 测试项目
 │   └── NuGet.Config
-├── app-v0.6/ ~ app-v0.8.3/   # 各版本已编译发布（可直接运行）
+├── app-v0.2/ ~ app-v0.8.3/   # 各版本已编译发布（可直接运行）
 ├── installers/<版本>/         # 各版本 Inno Setup 安装包
 ├── installer/                # 安装脚本（模板 ocl.iss.tmpl、生成器 gen-iss.py、各版本 ocl-*.iss）
 ├── plugins/wallpaper-engine/ # OpenClaw 壁纸插件
@@ -69,6 +69,10 @@ PCL-OpenClaw-Launcher/
 
 | 版本 | 路径 |
 | --- | --- |
+| v0.2 | `app-v0.2/` |
+| v0.3 | `app-v0.3/` |
+| v0.4 | `app-v0.4/` |
+| v0.5 | `app-v0.5/` |
 | v0.6 | `app-v0.6.0/` |
 | v0.7 | `app-v0.7.0/` |
 | v0.8 | `app-v0.8.0/` |
@@ -86,6 +90,7 @@ PCL-OpenClaw-Launcher/
 
 | 版本 | 安装包 |
 | --- | --- |
+| v0.5 | `OCL-0.5.0-Setup.exe` |
 | v0.6 | `OCL-0.6.0-Setup.exe` |
 | v0.7 | `OCL-0.7.0-Setup.exe` |
 | v0.8 | `OCL-0.8.0-Setup.exe` |
