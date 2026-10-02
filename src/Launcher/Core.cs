@@ -176,7 +176,7 @@ public sealed class Store
    config["plugins"]=new JsonObject { ["entries"]=entries };
   }
   File.WriteAllText(instance.Config,config.ToJsonString(new JsonSerializerOptions {WriteIndented=true}));
-  Settings.Instances.Add(instance); Settings.Selected=instance.Id; Save(); return instance;
+  Settings.Instances.Add(instance); Settings.Selected=instance.Id; Save(); LinkWallpaperPlugin(instance); return instance;
  }
  public void Rename(Instance instance,string name) {
   if(string.IsNullOrWhiteSpace(name)) throw new Exception("实例名称不能为空。");
@@ -198,7 +198,59 @@ public sealed class Store
     File.WriteAllText(clone.Config,node?.ToJsonString(new JsonSerializerOptions {WriteIndented=true})??"{}");
    }
   } catch(Exception) { try{File.Copy(sourceConfig,clone.Config,true);}catch{} }
-  Settings.Instances.Add(clone); Settings.Selected=clone.Id; Save(); return clone;
+  Settings.Instances.Add(clone); Settings.Selected=clone.Id; Save(); LinkWallpaperPlugin(clone); return clone;
+ }
+ // —— Wallpaper Engine 插件桥接 ——
+ // OpenClaw 的“受管实例”使用独立状态目录，不会自动合并全局 ~/.openclaw/extensions，
+ // 导致我们自带的 wallpaper-engine 在受管实例的插件列表里看不到。这里把该插件以目录连接
+ // （junction，无需管理员）挂入受管实例的扩展目录，并补全启用项与 controlUiRoot，使其可见可用。
+ public void LinkWallpaperPlugin(Instance instance) {
+  var runtime=instance.Runtime;
+  var configPath=instance.Config.Length>0?instance.Config:Path.Combine(instance.State.Length>0?instance.State:Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),".openclaw"),"openclaw.json");
+  EnsureWallpaperConfig(configPath,runtime);
+  if(instance.State.Length==0)return; // 默认实例本就用 ~/.openclaw，全局扩展天然可见
+  var source=ResolveWallpaperSource(); if(source==null)return;
+  var target=Path.Combine(instance.State,"extensions","wallpaper-engine");
+  if(!Directory.Exists(target)) { try { LinkOrCopy(source,target); } catch(IOException){} catch(UnauthorizedAccessException){} }
+ }
+ void EnsureWallpaperConfig(string configPath,string runtime) {
+  var root=File.Exists(configPath)?(JsonNode.Parse(File.ReadAllText(configPath)) as JsonObject??new JsonObject()):new JsonObject();
+  var changed=false;
+  var plugins=root["plugins"] as JsonObject??new JsonObject();
+  var entries=plugins["entries"] as JsonObject??new JsonObject();
+  var entry=entries["wallpaper-engine"] as JsonObject??new JsonObject();
+  if(ReadModel.B(entry,"enabled")!=true){entry["enabled"]=true;changed=true;}
+  var config=entry["config"] as JsonObject??new JsonObject();
+  var uiRoot=ResolveControlUiRoot(runtime);
+  if(config["controlUiRoot"] is not JsonValue){config["controlUiRoot"]=uiRoot;changed=true;}
+  if(config["libraryRoot"] is not JsonValue){config["libraryRoot"]=@"D:\STEAM\steamapps\workshop\content\431960";changed=true;}
+  entry["config"]=config; entries["wallpaper-engine"]=entry; plugins["entries"]=entries; root["plugins"]=plugins;
+  if(changed){Directory.CreateDirectory(Path.GetDirectoryName(configPath)!);File.WriteAllText(configPath,root.ToJsonString(new JsonSerializerOptions{WriteIndented=true}));}
+ }
+ static string? ResolveWallpaperSource() {
+  foreach(var c in new[]{Path.Combine(AppContext.BaseDirectory,"extensions","wallpaper-engine"),Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),".openclaw","extensions","wallpaper-engine")})
+   if(Directory.Exists(c))return c;
+  return null;
+ }
+ internal static string ResolveControlUiRoot(string runtime) {
+  foreach(var c in new[]{Path.Combine(AppContext.BaseDirectory,"dist","control-ui"),Path.Combine(runtime,"dist","control-ui"),@"E:\openclaw\dist\control-ui"})
+   if(Directory.Exists(c))return c;
+  return Path.Combine(runtime,"dist","control-ui");
+ }
+ // 目录连接（junction）无需管理员；失败（如跨卷）则退化为复制（排除 node_modules/.git 以减重）。
+ static void LinkOrCopy(string source,string target) {
+  Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+  var psi=new ProcessStartInfo("cmd.exe",$"/c mklink /J \"{target}\" \"{source}\""){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};
+  try { using var p=new Process{StartInfo=psi}; p.Start(); p.WaitForExit(); if(p.ExitCode==0&&Directory.Exists(target))return; } catch {}
+  CopyPlugin(source,target);
+ }
+ static void CopyPlugin(string source,string target) {
+  Directory.CreateDirectory(target);
+  foreach(var entry in Directory.GetFileSystemEntries(source)) {
+   var name=Path.GetFileName(entry); if(name=="node_modules"||name==".git")continue;
+   var dest=Path.Combine(target,name);
+   if(Directory.Exists(entry))CopyPlugin(entry,dest); else File.Copy(entry,dest,true);
+  }
  }
 }
 public static class SafeLog
@@ -361,7 +413,7 @@ public static class ReadModel
     result.Add(new(id,S(live?["channelLabels"],id,ChannelName(id)),state,SafeLog.Clean(S(entry,"lastError",actualLive?"状态来自网关；探测通过不代表消息已端到端送达。":"网关不可用或未返回运行数据，不能判断在线。")),S(meta,"origin"),S(entry,"accountId"),B(entry,"enabled")==true));
    }
   }
-  foreach(var (name,aliases) in new[]{("微信",new[]{"wechat","weixin","wecom"}),("Telegram",new[]{"telegram"}),("Signal",new[]{"signal"}),("QQ",new[]{"qq","qqbot"}),("邮箱",new[]{"email","mail","gmail","imap","smtp"})})
+  foreach(var (name,aliases) in new[]{("微信",new[]{"wechat","weixin","wecom"}),("Telegram",new[]{"telegram"}),("QQ",new[]{"qq","qqbot"}),("Signal",new[]{"signal"}),("Line",new[]{"line"}),("Discord",new[]{"discord"}),("邮箱",new[]{"email","mail","gmail","imap","smtp"})})
    if(!result.Any(r=>aliases.Any(a=>r.Id.Contains(a,StringComparison.OrdinalIgnoreCase))))result.Add(new("",name,"未发现渠道适配器","可在插件页安装对应适配器。邮箱也可能通过 Skill / Hook 接入，不能据此判断邮箱本身离线。"));
   return result;
  }

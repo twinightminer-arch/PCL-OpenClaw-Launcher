@@ -7,7 +7,7 @@
   const style = document.createElement("style");
   style.textContent = `
     #oc-wallpaper-layer,#oc-wallpaper-scrim{position:fixed;inset:0;pointer-events:none;z-index:0}
-    #oc-wallpaper-layer{width:100%;height:100%;background-position:center;background-repeat:no-repeat}
+    #oc-wallpaper-layer{width:100%;height:100%;background-position:center;background-repeat:no-repeat;will-change:transform;transform:translateZ(0);backface-visibility:hidden}
     html.oc-wallpaper body{background:transparent!important}
     html.oc-wallpaper openclaw-app{position:relative;z-index:1;--bg:transparent;--bg-accent:transparent}
     html.oc-wallpaper .shell{background:color-mix(in srgb,var(--panel,#0e1015) var(--oc-app-alpha,45%),transparent)!important}
@@ -35,9 +35,9 @@
     #oc-wallpaper-panel input[type=color]{padding:2px;width:52px;height:34px}
   `;
   document.head.append(style);
+  let layerEl = null, scrimEl = null, appliedKey = null;
   function removeLayer() {
-    document.getElementById("oc-wallpaper-layer")?.remove();
-    document.getElementById("oc-wallpaper-scrim")?.remove();
+    layerEl?.remove(); scrimEl?.remove(); layerEl = scrimEl = null; appliedKey = null;
     document.documentElement.classList.remove("oc-wallpaper");
   }
   function applyTypography(next) {
@@ -67,21 +67,46 @@
     if (url.origin !== base.origin || !url.pathname.startsWith(base.pathname)) return;
     url.searchParams.set("v", next.updatedAt || "0");
     const video = next.mediaType === "video";
+    const fit = ["cover","contain","auto"].includes(next.fit) ? next.fit : "cover";
+    const key = next.image + "|" + next.mediaType;
+    // Reuse the current layer when only opacity/blur/scrim changed, so an animated
+    // video wallpaper is never torn down and restarted (which would stutter).
+    if (layerEl && appliedKey === key && layerEl.tagName === (video ? "VIDEO" : "DIV")) {
+      layerEl.style.opacity = Math.min(1,Math.max(0,Number(next.opacity ?? .65)));
+      layerEl.style.filter = `blur(${Math.min(40,Math.max(0,Number(next.blur || 0)))}px)`;
+      if (scrimEl) {
+        scrimEl.style.background = /^#[a-f0-9]{6}$/i.test(next.scrimColor) ? next.scrimColor : "#0b0e13";
+        scrimEl.style.opacity = Math.min(1,Math.max(0,Number(next.scrim ?? .3)));
+      }
+      document.documentElement.style.setProperty("--oc-app-alpha", `${next.translucentApp === false ? 100 : Math.round(Math.min(1,Math.max(0,Number(next.appAlpha ?? .45)))*100)}%`);
+      return;
+    }
     const layer = document.createElement(video ? "video" : "div");
     layer.id = "oc-wallpaper-layer";
     layer.setAttribute("aria-hidden", "true");
-    const fit = ["cover","contain","auto"].includes(next.fit) ? next.fit : "cover";
+    layer.style.opacity = Math.min(1,Math.max(0,Number(next.opacity ?? .65)));
+    layer.style.filter = `blur(${Math.min(40,Math.max(0,Number(next.blur || 0)))}px)`;
     if (video) {
       layer.muted = true; layer.loop = true; layer.playsInline = true;
       layer.autoplay = !matchMedia("(prefers-reduced-motion: reduce)").matches;
       layer.src = url.href; layer.style.objectFit = fit === "auto" ? "contain" : fit;
+      // Promote the video to its own GPU compositor layer so it keeps painting
+      // new frames even while the page main thread is blocked — e.g. when the
+      // agent is thinking/working and the console streams tokens. Without this a
+      // busy main thread freezes the wallpaper in place.
+      layer.style.willChange = "transform";
+      layer.style.transform = "translateZ(0)";
+      layer.style.backfaceVisibility = "hidden";
     } else { layer.style.backgroundImage = `url(${JSON.stringify(url.href)})`; layer.style.backgroundSize = fit; }
-    layer.style.opacity = Math.min(1,Math.max(0,Number(next.opacity ?? .65)));
-    layer.style.filter = `blur(${Math.min(40,Math.max(0,Number(next.blur || 0)))}px)`;
     const scrim = document.createElement("div");scrim.id="oc-wallpaper-scrim";
     scrim.style.background = /^#[a-f0-9]{6}$/i.test(next.scrimColor) ? next.scrimColor : "#0b0e13";
     scrim.style.opacity = Math.min(1,Math.max(0,Number(next.scrim ?? .3)));
-    removeLayer();document.documentElement.style.setProperty("--oc-app-alpha", `${next.translucentApp === false ? 100 : Math.round(Math.min(1,Math.max(0,Number(next.appAlpha ?? .45)))*100)}%`);document.body.prepend(layer,scrim);document.documentElement.classList.add("oc-wallpaper");
+    if (layerEl) layerEl.remove();
+    if (scrimEl) scrimEl.remove();
+    layerEl = layer; scrimEl = scrim; appliedKey = key;
+    document.documentElement.style.setProperty("--oc-app-alpha", `${next.translucentApp === false ? 100 : Math.round(Math.min(1,Math.max(0,Number(next.appAlpha ?? .45)))*100)}%`);
+    document.body.prepend(layer,scrim);
+    document.documentElement.classList.add("oc-wallpaper");
     if (video && layer.autoplay) layer.play().catch(()=>{});
   }
   async function refresh(force = false) {
@@ -142,8 +167,14 @@
     launch.onclick=()=>{panel.hidden=!panel.hidden;launch.setAttribute("aria-expanded",String(!panel.hidden));if(!panel.hidden){opacity.value=String(config?.opacity??.65);fontCheck.checked=!!config?.fontCustom;fontColor.value=config?.fontColor||"#f2f3f5";fontSize.value=String(config?.fontSize||0);search.focus();if(!entries.length)run(load);}};
     document.addEventListener("keydown",e=>{if(e.key==="Escape"&&!panel.hidden){panel.hidden=true;launch.setAttribute("aria-expanded","false");launch.focus();}});
     document.body.append(launch,panel);refresh(true);
-    setInterval(()=>{if(!document.hidden)refresh();},4000);
-    document.addEventListener("visibilitychange",()=>{const video=document.querySelector("video#oc-wallpaper-layer");if(document.hidden)video?.pause();else{refresh();if(video?.autoplay)video.play().catch(()=>{});}});
+    setInterval(()=>{
+      if(!document.hidden)refresh();
+      // Resume the wallpaper video if the browser auto-paused it (tab throttling
+      // or a transient stall). The compositor layer handles main-thread jank.
+      const v=layerEl;
+      if(v&&v.tagName==="VIDEO"&&v.autoplay&&v.paused&&!document.hidden)v.play().catch(()=>{});
+    },4000);
+    document.addEventListener("visibilitychange",()=>{const v=layerEl;if(document.hidden)v?.pause();else{refresh();if(v&&v.tagName==="VIDEO"&&v.autoplay)v.play().catch(()=>{});}});
   }
   window.OpenClawWallpaper={refresh};
   if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",boot,{once:true});else boot();

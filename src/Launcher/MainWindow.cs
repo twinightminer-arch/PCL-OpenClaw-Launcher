@@ -121,7 +121,7 @@ public sealed partial class MainWindow : Window
   UpdateNavigation();
   if(pageErrors.TryGetValue(current.Id+name,out var failure))body.Children.Add(Card("检测未完成",Text(failure,12,"#D9363E"),Text("下方列表如有内容，是上次检测结果。点击右上角刷新重试。")));
   pageNote.Text=checkedAt==null?"所选实例："+current.Name:"所选实例："+current.Name+"  ·  最近检查 "+checkedAt.Value.ToString("HH:mm:ss");
-  switch(name){case "启动总览":Overview();break;case "版本与实例":Versions();break;case "插件管理":PluginPage();break;case "Skills 管理":SkillPage();break;case "软件连接":ChannelPage();break;case "整合包":PackPage();break;case "操作日志":LogPage();break;case "设置与关于":SettingsPage();break;case "版本下载":DownloadPage();break;case "个性化":AppearancePage();break;case "背景音乐":MusicPage();break;case "快捷方式图标":ShortcutIconPage();break;case "关于":AboutPage();break;}
+  switch(name){case "启动总览":Overview();break;case "版本与实例":Versions();break;case "插件管理":PluginPage();break;case "Skills 管理":SkillPage();break;case "软件连接":ChannelPage();break;case "整合包":PackPage();break;case "操作日志":LogPage();break;case "实例设置":InstanceSettingsPage();break;case "版本下载":DownloadPage();break;case "个性化":AppearancePage();break;case "背景音乐":MusicPage();break;case "快捷方式图标":ShortcutIconPage();break;case "关于":AboutPage();break;}
   ApplyOverviewVisibility();AnimateContent();
  }
  async Task StartGatewayCore() {
@@ -281,7 +281,13 @@ public sealed partial class MainWindow : Window
   var trash=Path.Combine(store.Root,"removed-skills",DateTime.Now.ToString("yyyyMMdd-HHmmss")+"-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(Path.GetDirectoryName(trash)!);Directory.Move(dir,trash);AddLog("Skill 已移到 "+trash+"；原位置 "+dir);await Refresh();
  }
  void ChannelPage() {
-  pageNote.Text="每个应用独立显示检测结果；绿：已连接/探测通过，黄：未验证，红：异常，灰：未配置。";
+  pageTitle.Text="软件连接";
+  pageNote.Text="两类连接：插件直连（如 Wallpaper Engine）与 API 密钥（Token）直连。绿：已连接/探测通过，黄：未验证，红：异常，灰：未配置。";
+  // —— 插件链接 ——
+  body.Children.Add(SectionTitle("插件链接"));
+  body.Children.Add(WallpaperConnectionCard());
+  // —— API 密钥链接（Token）——
+  body.Children.Add(SectionTitle("API 密钥链接（Token）"));
   body.Children.Add(Row(Button("检测全部",()=>{if(!busy)_=Refresh();}),Button("配置账号",()=>OpenWizard(["channels","add"]))));
   var search=Input("",350);search.ToolTip="筛选应用名称、账号或状态";body.Children.Add(Toolbar(Label("查找应用"),search));
   var cards=new StackPanel();body.Children.Add(cards);
@@ -294,7 +300,6 @@ public sealed partial class MainWindow : Window
   }
   if(channels.Count==0)cards.Children.Add(Toolbar(Text("正在等待检测结果；点击“检测全部”加载应用列表。",12)));}
   search.TextChanged+=(_,_)=>Render();Render();
-  body.Children.Add(WallpaperConnectionCard());
  }
  async Task ProbeChannel(ItemRow row) {
   var selected=current;
@@ -313,11 +318,21 @@ public sealed partial class MainWindow : Window
    try{var configPath=current.Config.Length>0?current.Config:Path.Combine(current.State.Length>0?current.State:Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),".openclaw"),"openclaw.json");
     var cfg=JsonNode.Parse(File.ReadAllText(configPath));var plugin=cfg?["plugins"]?["entries"]?["wallpaper-engine"];
     var library=ReadModel.S(plugin?["config"],"libraryRoot");var ui=ReadModel.S(plugin?["config"],"controlUiRoot");
+    if(ui.Length==0)ui=Store.ResolveControlUiRoot(current.Runtime); // 配置未写时按运行目录兜底
     var count=Directory.Exists(library)?Directory.EnumerateDirectories(library).Count(d=>File.Exists(Path.Combine(d,"project.json"))):0;
     var ready=ReadModel.B(plugin,"enabled")==true&&count>0&&File.Exists(Path.Combine(ui,"wallpaper","wallpaper.js"));
-    light.Fill=Brush(ready?"#248B69":"#D9363E");label.Text=ready?$"本地库可用 · {count} 项 · 网页组件已安装；在控制台点击“壁纸”测试网关连接。":"尚未就绪：请检查插件启用状态、壁纸库目录与网页组件。";
+    light.Fill=Brush(ready?"#248B69":"#D9363E");
+    label.Text=ready?$"本地库可用 · {count} 项 · 网页组件已安装；在控制台点击“壁纸”测试网关连接。":(plugin==null?"本实例未安装 Wallpaper Engine 插件，点击「修复插件」即可为本实例安装并启用。":"尚未就绪：请检查插件启用状态、壁纸库目录与网页组件；必要时点击「修复插件」。");
    }catch(Exception e){light.Fill=Brush("#D9363E");label.Text=SafeLog.Clean(e.Message);}
-  }),AsyncButton("打开网页控制台",OpenDashboard)));
+  }),Button("修复插件",()=>_ = RepairWallpaper()),AsyncButton("打开网页控制台",OpenDashboard)));
+ }
+ // 为当前实例安装/修复 Wallpaper Engine 插件（连接或复制到受管实例扩展目录并写配置），随后跳到插件管理刷新。
+ async Task RepairWallpaper() {
+  await Operate(async()=>{
+   store.LinkWallpaperPlugin(current);
+   AddLog("已为实例「"+current.Name+"」修复 Wallpaper Engine 插件（连接/复制并写入配置）。");
+   Navigate("插件管理");
+  });
  }
  void OpenWizard(string[] args) {
   if(!Confirm("将打开 OpenClaw 的交互配置窗口。完成后回到启动器刷新状态。\n实例："+current.Name))return;
@@ -373,18 +388,17 @@ public sealed partial class MainWindow : Window
   body.Children.Add(Row(Button("导出日志",()=>{var dialog=new SaveFileDialog{Filter="文本日志|*.txt",FileName="OpenClaw-launcher-log.txt"};if(dialog.ShowDialog(this)==true)File.WriteAllText(dialog.FileName,SafeLog.Clean(string.Join(Environment.NewLine,logLines)));}),Button("清空显示",()=>{logLines.Clear();log.Clear();})));
   body.Children.Add(Toolbar(Text("日志已过滤常见令牌字段；分享前仍请检查个人路径及第三方插件输出。",12)));body.Children.Add(log);
  }
- void SettingsPage() {
+ void InstanceSettingsPage() {
   var node=Input(store.Settings.Node,510);var state=Input(current.State,510);var config=Input(current.Config,510);
   var instanceName=Input(current.Name,280);
   body.Children.Add(Card("实例名称与版本",Text("每个实例对应一个 OpenClaw 版本；把实例改名后再创建，即可让同一版本并存多个实例（如同 PCL 的多个存档）。"),Row(instanceName,Button("重命名",()=>{store.Rename(current,instanceName.Text);instancePicker.Items.Refresh();AddLog("实例已重命名为 "+current.Name);SelectPage(page);}),Button("复制实例",()=>{var clone=store.Duplicate(current,current.Name+" 副本");current=clone;channelCatalog=null;instancePicker.Items.Refresh();instancePicker.SelectedItem=clone;gateway=null;plugins=[];skills=[];channels=[];checkedAt=null;SelectPage(page);AddLog("已复制实例 "+clone.Name);})),Text("当前版本："+current.Version+"  ·  "+(current.Managed?"独立实例（独立配置与工作目录）":"已有安装（使用所选配置）"),12)));
-  body.Children.Add(Card("本实例的扩展资源",Text("整合包属于当前实例「"+current.Name+"」；切换实例即切换该实例自己的资源与配置。插件与 Skill 请在左侧「下载」分组下的「插件市场 / Skill 库」中管理，开关与删除都只影响当前实例。"),Row(Button("整合包",()=>Navigate("整合包"),true))));
+  body.Children.Add(Card("扩展资源管理",Text("插件、Skill 与整合包都只作用于当前实例「"+current.Name+"」；切换实例即切换该实例自己的扩展与配置。"),Row(Button("插件市场",()=>Navigate("插件管理"),true),Button("Skill 库",()=>Navigate("Skills 管理")),Button("整合包",()=>Navigate("整合包")))));
   body.Children.Add(Card("新实例默认插件集",Text("下载/创建新实例时只携带这里的“必要插件”，其余由用户自行安装或制作。以当前实例为模板采集最省事。"),Row(AsyncButton("照搬当前实例",CaptureDefaultPlugins,true),Button("清空默认集",()=>{store.Settings.DefaultPlugins=[];store.Save();SelectPage(page);})),Text(store.Settings.DefaultPlugins.Count==0?"尚未采集默认插件集：新实例将不携带任何插件。":"已采集 "+store.Settings.DefaultPlugins.Count+" 个默认插件："+string.Join("、",store.Settings.DefaultPlugins.Take(8))+(store.Settings.DefaultPlugins.Count>8?" …":""),11,"#999999")));
   body.Children.Add(Card("运行环境与配置",Text("Node.js 可执行文件"),node,Text("OpenClaw 状态目录（留空使用默认目录）"),state,Text("配置文件路径（留空使用默认规则；不是程序目录里的任意 JSON）"),config,Row(Button("选择配置文件",()=>{var dialog=new OpenFileDialog{Filter="配置文件|*.json;*.json5|所有文件|*.*"};if(dialog.ShowDialog(this)==true)config.Text=dialog.FileName;}),Button("保存",()=>{
    if(owned.TryGetValue(current.Id,out var p)&&!p.HasExited)throw new Exception("请先停止该实例网关，再修改运行设置。");
    RuntimeInstall.ResolveExecutable(node.Text.Trim());if(config.Text.Length>0&&!File.Exists(config.Text))throw new Exception("配置文件不存在。");if(state.Text.Length>0&&!Directory.Exists(state.Text))throw new Exception("状态目录不存在。");
    store.Settings.Node=node.Text.Trim();runner.Node=store.Settings.Node;current.State=state.Text.Trim();current.Config=config.Text.Trim();store.Save();gateway=null;checkedAt=null;AddLog("设置已保存。");
   }),Button("打开配置向导",()=>OpenWizard(["configure"])),AsyncButton("验证配置",async()=>{await Execute("config","validate");MessageBox.Show(this,"配置验证通过。","检查完成");}))));
-  body.Children.Add(Card("关于与署名",Text("PCL 原作者：龙腾猫跃",17,"#353535"),Row(Button("原作者与源码",()=>OpenLink("https://github.com/Meloong-Git/PCL")),Button("赞助 PCL 原作者",()=>OpenLink("https://meloong.com/afd/a/LTCat"))),Text("PCL-OpenClaw-Launcher "+Brand.Version+" · 第三方基于 PCL 独立二次创作，与 PCL、OpenClaw、DeepSeek 官方无隶属关系。"),Text("PCL 来源：FormMain 顶栏与分栏结构、PageLaunchLeft 启动区、MyButton / MyRadioButton 外观、MyCard 卡片和 MyDropShadow 阴影。已移除 Minecraft 内容，按你的要求改为红色 OCL。"),Text("源码随附于 src；许可与使用指南见 LICENCE。需要 .NET Desktop Runtime 10 和 OpenClaw 所需的 Node.js。")));
  }
  static void OpenLink(string url)=>Process.Start(new ProcessStartInfo(url){UseShellExecute=true});
  void OpenDonate() {

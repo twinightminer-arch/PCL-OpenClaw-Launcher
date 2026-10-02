@@ -12,9 +12,9 @@
 
 - **启动总览**：一键启动 / 停止 OpenClaw 网关（`node openclaw.mjs gateway --port 3000 --allow-unconfigured`），并自动打开控制台 `http://localhost:3000`。
 - **版本与实例**：管理多个 OpenClaw 版本与运行实例。**每个实例对应一个 OpenClaw 版本**；把实例改名后再创建，即可让同一版本并存多个实例（如同 PCL 的多个存档）。
-- **实例设置**：实例名称/版本、复制实例，以及本实例的整合包入口（资源随实例走）；插件与 Skill 改在左侧「下载」分组下的「插件市场 / Skill 库」独立管理。
+- **实例设置（每个实例独立）**：不再是「设置」的子页，而是每个实例都拥有自己的设置入口——在「版本与实例」列表点「设置」即可进入该实例的名称/版本、复制实例、运行环境与扩展资源管理；插件、Skill、整合包都只作用于当前实例。
 - **新实例默认插件集**：下载/创建新实例时只携带“必要插件”，其余由用户自行安装或制作；可一键“照搬当前实例”采集默认集。
-- **插件市场 / Skill 库（位于「下载」分组）**：列出官方内置与自定义（extensions 目录）插件与技能，每项带「蓝=启用 / 灰=禁用」开关与删除按钮，支持按名称/状态/来源筛选、安装、诊断；启用、禁用、删除都只影响当前实例。
+- **插件市场 / Skill 库 / 整合包（位于「实例」分组）**：列出官方内置与自定义（extensions 目录）插件与技能，每项带「蓝=启用 / 灰=禁用」开关与删除按钮，支持按名称/状态/来源筛选、安装、诊断；启用、禁用、删除都只影响当前实例。
 - **软件连接 / 整合包**：管理外部软件接入与整合包安装。
 - **操作日志**：记录启动器与网关的关键操作。
 - **升级不丢设置（v0.8.0 起）**：用户数据统一放在 `%LOCALAPPDATA%\OCL`，升级/卸载都不丢设置、背景图与歌单；首次运行会自动继承旧版本数据目录，并把背景媒体、音乐复制一份到新目录。
@@ -22,6 +22,9 @@
 - **打赏入口（v0.8.0）**：「关于」页新增蓝色「打赏 OCL 作者」按钮，点击打开本地打赏页，内含微信 / 支付宝收款码。
 - **快捷方式图标（v0.8.1）**：「设置 → 快捷方式图标」可选桌面 OCL.lnk 使用 OCL 六边形或 OpenClaw 角色图标，确定后即时更换，无需重启。
 - **运行环境自检（v0.8.1）**：启动时自动探测满足 OpenClaw 要求的 Node.js（≥22.22.3 或 ≥24.15.0 等），避免 Node 版本不符导致插件 / 技能列表为空。
+- **连接页面重做（v0.8.2）**：分为「插件链接」（Wallpaper Engine 走插件直连）与「API 密钥链接（Token）」（微信 / QQ / Telegram 已连接，Signal / Line / Discord 可连接但尚未接入）；两类均带「检测连接」按钮与绿/黄/红/灰状态指示灯。
+- **Wallpaper 插件可见性修复（v0.8.2）**：受管实例原本在插件列表里看不到自带的 wallpaper-engine；现已在创建/复制实例时自动以目录连接挂入实例扩展目录并写入启用配置，也可在「软件连接 → Wallpaper Engine」卡片点「修复插件」手动修复。
+- **Wallpaper 卡顿修复（v0.3.1）**：OpenClaw 由空闲转入思考/工作态时控制台动态壁纸会卡住，已通过把视频层提升为 GPU 合成层并自动恢复暂停的视频修复。
 
 ## 目录结构
 
@@ -72,6 +75,7 @@ PCL-OpenClaw-Launcher/
 | v0.7 | `app-v0.7.0/` |
 | v0.8 | `app-v0.8.0/` |
 | v0.8.1 | `app-v0.8.1/` |
+| v0.8.2 | `app-v0.8.2/` |
 
 每个目录均含可直接运行的 `PCL-OpenClaw-Launcher.exe`（随附 `PclControls.dll` 等依赖）。
 
@@ -88,6 +92,7 @@ PCL-OpenClaw-Launcher/
 | v0.7 | `OCL-0.7.0-Setup.exe` |
 | v0.8 | `OCL-0.8.0-Setup.exe` |
 | v0.8.1 | `OCL-0.8.1-Setup.exe` |
+| v0.8.2 | `OCL-0.8.2-Setup.exe` |
 
 安装包只包含可执行文件、依赖、图标与打赏页资源，**不含**任何个人配置、密钥或源码。脚本见 `installer/ocl.iss.tmpl`（模板）与 `installer/ocl-*.iss`（各版本），生成脚本 `installer/gen-iss.py`。
 
@@ -103,7 +108,7 @@ PCL-OpenClaw-Launcher/
 
 ## OpenClaw 壁纸插件
 
-`plugins/wallpaper-engine`（Wallpaper Engine，v0.3.0）把本机 Wallpaper Engine 库中的壁纸，或任意本地图片 / GIF / 视频文件，作为 OpenClaw 网页控制台背景，并可自定义控制台字体颜色与字号。
+`plugins/wallpaper-engine`（Wallpaper Engine，v0.3.1）把本机 Wallpaper Engine 库中的壁纸，或任意本地图片 / GIF / 视频文件，作为 OpenClaw 网页控制台背景，并可自定义控制台字体颜色与字号。受管实例可在「软件连接 → Wallpaper Engine」卡片点「修复插件」自动安装到当前实例。
 
 ```powershell
 openclaw plugins install ./plugins/wallpaper-engine --force
