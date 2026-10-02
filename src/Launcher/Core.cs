@@ -200,6 +200,25 @@ public sealed class Store
   } catch(Exception) { try{File.Copy(sourceConfig,clone.Config,true);}catch{} }
   Settings.Instances.Add(clone); Settings.Selected=clone.Id; Save(); LinkWallpaperPlugin(clone); return clone;
  }
+ // 实例独立性校验：由启动器底层自动执行（启动时与创建实例后），不暴露成用户按钮。
+ // 每个实例必须有自己的状态目录；共用同一状态目录会让插件与 Skill 互相串台。
+ public List<string> EnsureInstanceIsolation() {
+  var problems=new List<string>();
+  var byRoot=new Dictionary<string,List<Instance>>(StringComparer.OrdinalIgnoreCase);
+  foreach(var instance in Settings.Instances) {
+   var root=instance.State.Length>0?Path.GetFullPath(instance.State).TrimEnd(Path.DirectorySeparatorChar)
+    :Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),".openclaw");
+   if(!byRoot.TryGetValue(root,out var list))byRoot[root]=list=new List<Instance>();
+   list.Add(instance);
+  }
+  foreach(var pair in byRoot) {
+   if(pair.Value.Count<2)continue;
+   problems.Add("实例 "+string.Join("、",pair.Value.Select(i=>i.Name))+" 共用状态目录 "+pair.Key+"：插件与 Skill 会互相影响，请在「运行环境」里给它们各自指定不同目录。");
+  }
+  return problems;
+ }
+ // 列出「其他实例」，供一键导入实例设置使用。
+ public IEnumerable<Instance> OtherInstances(Instance self)=>Settings.Instances.Where(i=>i!=self);
  // —— Wallpaper Engine 插件桥接 ——
  // OpenClaw 的“受管实例”使用独立状态目录，不会自动合并全局 ~/.openclaw/extensions，
  // 导致我们自带的 wallpaper-engine 在受管实例的插件列表里看不到。这里把该插件以目录连接
@@ -368,8 +387,11 @@ public sealed class Runner
 public sealed record ItemRow(string Id,string Name,string State,string Detail,string Source="",string Account="",bool Enabled=false,string RootDir="") {
  public string Indicator => State switch { "已连接" or "探测通过" or "已加载" or "壁纸库可用" => "#248B69", "连接异常" or "未连接" or "检测失败" or "加载失败" => "#D9363E", _ when State.Contains("未验证") => "#C58B20", _ => "#999999" };
 }
+// 插件市场条目（下载页，跨实例共用；只有「添加到实例」这一动作）。
+public sealed record MarketItem(string Id,string Display,string Owner,string Summary,string Version,string Downloads,bool Official);
 public static class ReadModel
 {
+ public static JsonNode? Node(JsonNode? node,string key)=>node?[key];
  public static string S(JsonNode? node,string key,string fallback="")=>node?[key]?.ToString()??fallback;
  public static bool? B(JsonNode? node,string key) => node?[key] is JsonValue value && value.TryGetValue<bool>(out var b)?b:null;
  public static List<ItemRow> Plugins(JsonNode? json) {

@@ -20,7 +20,29 @@ public sealed partial class MainWindow
  internal async Task RunUiSmoke(string directory) {
   Directory.CreateDirectory(directory);var checks=new List<string>();
   void Capture(string name){UpdateLayout();var bitmap=new RenderTargetBitmap((int)ActualWidth,(int)ActualHeight,96,96,PixelFormats.Pbgra32);bitmap.Render(this);var encoder=new PngBitmapEncoder();encoder.Frames.Add(BitmapFrame.Create(bitmap));using var file=File.Create(Path.Combine(directory,name+".png"));encoder.Save(file);}
-  foreach(var name in new[]{"启动总览","版本下载","版本与实例","实例设置","插件管理","Skills 管理","软件连接","整合包","操作日志","个性化","背景音乐","关于"}) {CapturePage(name);await Task.Delay(40);Capture(name);checks.Add("PASS page: "+name);}
+  foreach(var name in new[]{"启动总览","版本下载","版本与实例","插件市场","软件连接","实例设置","运行环境","导入实例设置","插件管理","Skills 管理","整合包","操作日志","个性化","背景音乐","关于"}) {CapturePage(name);await Task.Delay(40);Capture(name);checks.Add("PASS page: "+name);}
+  // 0.8.6：实例设置是「每个实例一份」的东西，进入后顶端分区导航让位给「实例设置」一项，退出即还原。
+  CapturePage("实例设置");
+  if(topButtons["实例设置"].Visibility!=Visibility.Visible)throw new Exception("实例设置导航项未出现");
+  if(topButtons["启动"].Visibility!=Visibility.Collapsed)throw new Exception("实例设置模式下分区导航未让位");
+  CapturePage("启动总览");
+  if(topButtons["实例设置"].Visibility!=Visibility.Collapsed)throw new Exception("离开实例设置后导航项未隐藏");
+  if(topButtons["启动"].Visibility!=Visibility.Visible)throw new Exception("离开实例设置后分区导航未还原");
+  checks.Add("PASS instance-settings nav swaps in and restores the section nav");
+  // 0.8.6：列表快照让插件 / Skill 进页即全显，不等后台扫描；折叠按钮只影响本分区。
+  CapturePage("插件管理");var instant=plugins.Count;
+  checks.Add(instant>0?"PASS plugin list shows "+instant+" entries without waiting for a scan":"UNVERIFIED list snapshot: 该实例尚无缓存，首次进入仍需扫描");
+  if(pluginToggle!=null) {
+   var section=pluginSection;
+   if(section==null)throw new Exception("插件分区未构建");
+   pluginToggle.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Button.ClickEvent));
+   if(section.Visibility!=Visibility.Collapsed)throw new Exception("插件分区未收起");
+   Capture("插件-收起");
+   pluginToggle.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Button.ClickEvent));
+   if(section.Visibility!=Visibility.Visible)throw new Exception("插件分区未展开");
+   checks.Add("PASS plugin section collapses and expands");
+  }
+  Capture("插件列表");
   channels=[new("telegram","Telegram","已连接","网关报告连接已建立。",Account:"default"),new("signal","Signal","未连接","连接未建立。"),new("email","邮箱","运行中 · 连接未验证","适配器运行中，尚未返回探测结果。")];
   CapturePage("软件连接");await Task.Delay(40);Capture("应用连接区域");checks.Add("PASS populated per-application cards with green, red and amber indicators");
   var pair=(System.Windows.Controls.StackPanel)BrandPair(68,20);var left=(System.Windows.Controls.Image)pair.Children[0];var right=(System.Windows.Controls.Image)pair.Children[1];

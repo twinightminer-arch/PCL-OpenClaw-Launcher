@@ -12,10 +12,12 @@ public sealed partial class MainWindow
  readonly Border titleBar=new(),sidebarSurface=new();
  readonly Image wallpaper=new();
  readonly Dictionary<string,Button> topButtons=new();
+ // 0.8.6：实例设置专属导航项，只在实例设置里显示。
+ Button? instanceButton;
  readonly TextBlock musicBadge=new();
  ColumnDefinition sidebarColumn=new();
  Border contentPane=new();
- string GroupFor(string value)=>value switch {"版本下载" or "版本与实例"=>"下载","软件连接"=>"连接","实例设置" or "插件管理" or "Skills 管理" or "整合包"=>"实例","个性化" or "背景音乐" or "快捷方式图标"=>"设置","关于" or "操作日志"=>"关于",_=>"启动"};
+ string GroupFor(string value)=>value switch {"版本下载" or "版本与实例" or "插件市场"=>"下载","软件连接"=>"连接","实例设置" or "运行环境" or "导入实例设置" or "插件管理" or "Skills 管理" or "整合包"=>"实例设置","个性化" or "背景音乐" or "快捷方式图标"=>"设置","关于" or "操作日志"=>"关于",_=>"启动"};
  // 页面自身可能在 SelectPage 里已经起了刷新（如实例设置页空列表自动加载），此时不再叠加一次。
  void Navigate(string destination) {refreshCancellation?.Cancel();SelectPage(destination);if(!busy&&refreshCancellation==null&&(!refreshTimes.TryGetValue(current.Id+destination,out var time)||DateTime.Now-time>TimeSpan.FromSeconds(60)))_ = Refresh();}
  void BuildShell() {
@@ -36,6 +38,10 @@ public sealed partial class MainWindow
    var destination=destinations[i];var button=Button("",()=>Navigate(destination));button.Style=(Style)FindResource("TitleButton");
    var row=new StackPanel{Orientation=Orientation.Horizontal};row.Children.Add(new System.Windows.Shapes.Path{Data=Geometry.Parse(PclGlyphs.Title[i]),Fill=Brushes.White,Width=14,Height=14,Stretch=Stretch.Uniform,VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(0,0,7,0)});row.Children.Add(new TextBlock{Text=groups[i],Foreground=Brushes.White,VerticalAlignment=VerticalAlignment.Center});button.Content=row;topButtons[groups[i]]=button;tabs.Children.Add(button);
   }
+  // 0.8.6：插件与 Skill 都是「每个实例一份」的东西，因此做成实例设置专属导航——
+  // 进入实例设置后顶端只保留它，返回启动总览或切到其他分区即自动隐藏。
+  instanceButton=Button("",()=>Navigate("实例设置"));instanceButton.Style=(Style)FindResource("TitleButton");
+  var instanceRow=new StackPanel{Orientation=Orientation.Horizontal};instanceRow.Children.Add(new TextBlock{Text="⬡",FontSize=15,Foreground=Brushes.White,VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(0,0,7,0)});instanceRow.Children.Add(new TextBlock{Text="实例设置",Foreground=Brushes.White,VerticalAlignment=VerticalAlignment.Center});instanceButton.Content=instanceRow;instanceButton.Visibility=Visibility.Collapsed;topButtons["实例设置"]=instanceButton;tabs.Children.Add(instanceButton);
   var windowButtons=new StackPanel{Orientation=Orientation.Horizontal,HorizontalAlignment=HorizontalAlignment.Right,VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(0,0,9,0)};Grid.SetColumn(windowButtons,2);titleContent.Children.Add(windowButtons);
   foreach(var (glyph,action,hint) in new (string,Action,string)[]{("─",()=>WindowState=WindowState.Minimized,"最小化"),("□",()=>WindowState=WindowState==WindowState.Maximized?WindowState.Normal:WindowState.Maximized,"最大化 / 还原"),("×",Close,"关闭")}) {
    var b=Button(glyph,action);b.Style=(Style)FindResource("TitleButton");b.Width=27;b.Height=28;b.MinHeight=0;b.Margin=new Thickness(2,0,2,0);b.Padding=new Thickness(0);b.FontSize=20;b.ToolTip=hint;windowButtons.Children.Add(b);
@@ -53,7 +59,13 @@ public sealed partial class MainWindow
   instancePicker.ItemsSource=store.Settings.Instances;instancePicker.SelectedItem=current;instancePicker.SelectionChanged+=async(_,_)=>{if(instancePicker.SelectedItem is Instance selected&&selected!=current){if(busy){instancePicker.SelectedItem=current;return;}current=selected;channelCatalog=null;store.Settings.Selected=current.Id;store.Save();gateway=null;plugins=[];skills=[];channels=[];checkedAt=null;SelectPage(page);await Refresh();}};
  }
  void UpdateNavigation() {
-  foreach(var (group,b) in topButtons)b.Background=group==GroupFor(page)?Brush("#35FFFFFF"):Brushes.Transparent;
+  // 实例设置模式：顶端 5 个分区导航让位给「实例设置」一项；退出即还原。
+  var inInstance=GroupFor(page)=="实例设置";
+  foreach(var (group,b) in topButtons) {
+   if(group=="实例设置"){b.Visibility=inInstance?Visibility.Visible:Visibility.Collapsed;b.Background=inInstance?Brush("#35FFFFFF"):Brushes.Transparent;continue;}
+   b.Visibility=inInstance?Visibility.Collapsed:Visibility.Visible;
+   b.Background=group==GroupFor(page)?Brush("#35FFFFFF"):Brushes.Transparent;
+  }
   sidebarColumn.Width=new GridLength(page=="启动总览"?300:176);
   if(instancePicker.Parent is Panel old)old.Children.Remove(instancePicker);
   if(gatewayBadge.Parent is Panel prior)prior.Children.Remove(gatewayBadge);
@@ -63,15 +75,17 @@ public sealed partial class MainWindow
   var currentBox=new StackPanel{Margin=new Thickness(12)};currentBox.Children.Add(Text("当前实例",11,"#999999"));instancePicker.Width=152;instancePicker.Margin=new Thickness(0);currentBox.Children.Add(instancePicker);DockPanel.SetDock(currentBox,Dock.Bottom);dock.Children.Add(currentBox);
   var menu=new StackPanel{Margin=new Thickness(0,12,0,0)};dock.Children.Add(menu);
   var entries=GroupFor(page) switch {
-   "下载"=>new[]{("自动安装","版本下载","⬡"),("本地实例","版本与实例","▣")},
+   "下载"=>new[]{("自动安装","版本下载","⬡"),("本地实例","版本与实例","▣"),("插件市场","插件市场","✚")},
    "连接"=>new[]{("软件连接","软件连接","◎")},
-   // 0.8.3：侧栏同样不再提供「实例设置」入口（唯一入口在启动页），此处仅用于在扩展资源页之间切换。
-   "实例"=>new[]{("插件市场","插件管理","◇"),("Skill 库","Skills 管理","✧"),("整合包","整合包","▤")},
+   // 0.8.6：实例设置提供「概览 / 运行环境 / 导入实例设置」以及每实例一份的插件、Skill、整合包，并在之后显示「返回启动总览」。
+   "实例设置"=>new[]{("概览","实例设置","▣"),("运行环境","运行环境","⚙"),("导入实例设置","导入实例设置","⇩"),("插件","插件管理","◇"),("Skill","Skills 管理","✧"),("整合包","整合包","▤")},
    "设置"=>new[]{("个性化","个性化","✦"),("背景音乐","背景音乐","♫"),("快捷方式图标","快捷方式图标","⬡")},
    "关于"=>new[]{("关于","关于","ⓘ"),("操作日志","操作日志","≡")},
    _=>new[]{("关于","关于","ⓘ"),("操作日志","操作日志","≡")}
   };
+  if(GroupFor(page)=="实例设置")menu.Children.Add(Button("← 返回启动总览",()=>Navigate("启动总览")));
   foreach(var (label,destination,glyph) in entries) {
+   if(label=="概览")menu.Children.Add(new TextBlock{Text="实例",FontSize=11,Foreground=Brush("#999999"),Margin=new Thickness(13,16,0,4)});
    if(label=="插件")menu.Children.Add(new TextBlock{Text="扩展资源",FontSize=11,Foreground=Brush("#999999"),Margin=new Thickness(13,22,0,4)});
    var b=Button("",()=>Navigate(destination));b.Height=37;b.Margin=new Thickness(0);b.BorderThickness=new Thickness(0);b.Padding=new Thickness(0);b.HorizontalContentAlignment=HorizontalAlignment.Stretch;b.Background=destination==page?(System.Windows.Media.Brush)FindResource("AccentSoft"):Brushes.Transparent;
    var g=new Grid();g.ColumnDefinitions.Add(new(){Width=new GridLength(4)});g.ColumnDefinitions.Add(new(){Width=new GridLength(35)});g.ColumnDefinitions.Add(new(){Width=new GridLength(1,GridUnitType.Star)});
