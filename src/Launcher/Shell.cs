@@ -16,7 +16,8 @@ public sealed partial class MainWindow
  ColumnDefinition sidebarColumn=new();
  Border contentPane=new();
  string GroupFor(string value)=>value switch {"版本下载" or "版本与实例"=>"下载","软件连接"=>"连接","实例设置" or "插件管理" or "Skills 管理" or "整合包"=>"实例","个性化" or "背景音乐" or "快捷方式图标"=>"设置","关于" or "操作日志"=>"关于",_=>"启动"};
- void Navigate(string destination) {refreshCancellation?.Cancel();SelectPage(destination);if(!busy&&(!refreshTimes.TryGetValue(current.Id+destination,out var time)||DateTime.Now-time>TimeSpan.FromSeconds(60)))_ = Refresh();}
+ // 页面自身可能在 SelectPage 里已经起了刷新（如实例设置页空列表自动加载），此时不再叠加一次。
+ void Navigate(string destination) {refreshCancellation?.Cancel();SelectPage(destination);if(!busy&&refreshCancellation==null&&(!refreshTimes.TryGetValue(current.Id+destination,out var time)||DateTime.Now-time>TimeSpan.FromSeconds(60)))_ = Refresh();}
  void BuildShell() {
   WindowStyle=WindowStyle.None;AllowsTransparency=true;Background=Brushes.Transparent;ResizeMode=ResizeMode.CanResize;
   WindowChrome.SetWindowChrome(this,new WindowChrome{CaptionHeight=0,ResizeBorderThickness=new Thickness(7),GlassFrameThickness=new Thickness(0),CornerRadius=new CornerRadius(6)});

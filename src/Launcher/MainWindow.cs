@@ -214,7 +214,7 @@ public sealed partial class MainWindow : Window
    return plugins.Where(r=>(q.Length==0||(r.Name+" "+r.State+" "+r.Source+" "+r.Detail).Contains(q,StringComparison.OrdinalIgnoreCase)))
     .Where(r=>s==0||(s==1&&r.Enabled)||(s==2&&!r.Enabled)||(s==3&&r.Source=="bundled")||(s==4&&r.Source is not "" and not "bundled")).ToList();
   }
-  void Render(){panel.Children.Clear();var rows=Filtered();foreach(var r in rows)panel.Children.Add(PluginCard(r));if(rows.Count==0)panel.Children.Add(Toolbar(Text(plugins.Count==0?"尚未加载列表：请点击右上角 ↻ 刷新，或稍候自动刷新。":"没有匹配的插件。",12)));}
+  void Render(){panel.Children.Clear();var rows=Filtered();foreach(var r in rows)panel.Children.Add(PluginRow(r));if(rows.Count==0)panel.Children.Add(Toolbar(Text(plugins.Count==0?(refreshCancellation!=null?"正在加载插件列表；首次扫描可能需要 1–2 分钟…":"尚未加载列表：请点击右上角 ↻ 刷新，或稍候自动刷新。"):"没有匹配的插件。",12)));}
   filterBox.TextChanged+=(_,_)=>Render();scope.SelectionChanged+=(_,_)=>Render();
   body.Children.Add(Row(Button("打开插件目录",OpenPluginFolder),AsyncButton("插件诊断",async()=>{await Execute("plugins","doctor");SelectPage("操作日志");})));
   Render();
@@ -225,14 +225,78 @@ public sealed partial class MainWindow : Window
    var args=new List<string>{"plugins","install",spec.Text.Trim()};if(trust.IsChecked==true)args.Add("--force");await Execute(args.ToArray());await Refresh();
   },true),Button("本地目录",()=>{var dialog=new OpenFolderDialog();if(dialog.ShowDialog(this)==true)spec.Text=dialog.FolderName;}))));
  }
- UIElement PluginCard(ItemRow row) {
-  var name=Text(row.Name,15,"#333333");
-  var meta=new StackPanel{Orientation=Orientation.Horizontal};
-  meta.Children.Add(new System.Windows.Shapes.Ellipse{Width=9,Height=9,Fill=Brush(row.Indicator),Margin=new Thickness(0,0,6,0),VerticalAlignment=VerticalAlignment.Center});
-  meta.Children.Add(Text(row.State+(row.Source.Length>0?"  ·  "+row.Source:""),12,row.Indicator));
-  var toggle=SwitchWithLabel(row.Enabled,enabled=>_ = Operate(async()=>{await Execute("plugins",enabled?"enable":"disable",row.Id);await Refresh();}));
-  var del=Button("删除",()=>_ = Operate(async()=>{ if(row.Source=="bundled")throw new Exception("内置插件随 OpenClaw 更新，无法删除；如不需要请使用「禁用」。"); if(!Confirm($"从当前实例卸载插件 {row.Name}？"))return; await Execute("plugins","uninstall",row.Id,"--force");await Refresh(); }));
-  return Card("",name,meta,Row(toggle,del),Text(row.Detail.Length>0?row.Detail:"（无描述）",11,"#999999"));
+ // PCL「mods 管理」风格横向行：指示灯 + 名称/状态/来源 ‖ 开关 + 删除（0.8.4）
+ UIElement PluginRow(ItemRow row) {
+  var grid=new Grid();
+  grid.ColumnDefinitions.Add(new(){Width=new GridLength(20)});
+  grid.ColumnDefinitions.Add(new(){Width=new GridLength(1,GridUnitType.Star)});
+  grid.ColumnDefinitions.Add(new(){Width=GridLength.Auto});
+  var light=new System.Windows.Shapes.Ellipse{Width=9,Height=9,Fill=Brush(row.Indicator),VerticalAlignment=VerticalAlignment.Center,ToolTip=row.State};
+  Grid.SetColumn(light,0);grid.Children.Add(light);
+  var info=new StackPanel{VerticalAlignment=VerticalAlignment.Center};
+  var name=new TextBlock{Text=row.Name,FontSize=13,Foreground=Brush("#333333"),VerticalAlignment=VerticalAlignment.Center};
+  var meta=new TextBlock{Text=row.State+(row.Source.Length>0?"  ·  "+row.Source:""),FontSize=11,Foreground=Brush(row.Indicator),Margin=new Thickness(0,2,0,0)};
+  info.Children.Add(name);info.Children.Add(meta);
+  if(row.Detail.Length>0)info.ToolTip=SafeLog.Clean(row.Detail);
+  Grid.SetColumn(info,1);grid.Children.Add(info);
+  var actions=new StackPanel{Orientation=Orientation.Horizontal,VerticalAlignment=VerticalAlignment.Center};
+  // 开关：直接调 OpenClaw CLI 写配置（已实测写入 plugins.entries.<id>.enabled）。
+  actions.Children.Add(SwitchWithLabel(row.Enabled,enabled=>_ = Operate(async()=>{
+   await Execute("plugins",enabled?"enable":"disable",row.Id);
+   AddLog("插件 "+row.Name+" 已"+(enabled?"启用":"禁用")+"并写入配置；如网关正在运行，需重启网关后生效。");
+   await Refresh();
+  })));
+  var del=Button("删除",()=>_ = Operate(()=>UninstallPlugin(row)));del.Margin=new Thickness(12,0,0,0);
+  actions.Children.Add(del);
+  Grid.SetColumn(actions,2);grid.Children.Add(actions);
+  return new Border{CornerRadius=new CornerRadius(4),BorderThickness=new Thickness(1),BorderBrush=Brush("#ECECEC"),Background=Brush("#FBFBFB"),Padding=new Thickness(10,7,10,7),Margin=new Thickness(0,0,0,5),Child=grid};
+ }
+ // 卸载插件：先让 OpenClaw 卸载（对 plugins install 装进来的有效）；
+ // 失败则兜底——手动放入/全局扩展没有安装记录，OpenClaw 会拒绝，这里直接移除目录并清理配置。
+ async Task UninstallPlugin(ItemRow row) {
+  if(row.Source=="bundled")throw new Exception("内置插件随 OpenClaw 更新，无法删除；如不需要请使用「禁用」。");
+  var path=FindPluginDirectory(row.Id,row.RootDir);
+  var where=path==null?"（未定位到插件目录，将只清理配置）":"\n将移除目录："+path+"\n普通目录会移到启动器回收目录，可手动移回恢复；连接点只删链接。";
+  if(!Confirm("从当前实例卸载插件 "+row.Name+"？"+where+"\n\n先由 OpenClaw 卸载；若它仍在列表中（手动放入的插件没有安装记录、或全局扩展仍被发现），会补一步移除目录并清理配置。"))return;
+  var result=await Run("plugins","uninstall",row.Id,"--force");
+  AddLog(result.Ok?("OpenClaw 已卸载插件 "+row.Name):("OpenClaw 拒绝卸载「"+row.Name+"」（"+SafeLog.Clean(result.Summary)+"）"));
+  await Refresh();
+  // 关键复查：无论 CLI 是否报成功，只要该插件仍出现在本实例列表里
+  // （常见原因：手动放入扩展目录没有安装记录 → 拒绝卸载；或目录仍在 extensions 被自动发现），
+  // 就兜底移除插件目录并清理配置，保证「删除」一定生效。
+  if(!plugins.Any(p=>p.Id==row.Id))return;
+  AddLog("插件仍在列表中，兜底移除插件目录并清理配置。");
+  RemovePluginDirectory(row.Id,row.RootDir);
+  RemovePluginEntry(row.Id);
+  await Refresh();
+ }
+ // 移除插件目录：优先用 OpenClaw 报告的 rootDir（全局插件会指向 ~/.openclaw/extensions），否则按顺序猜。
+ // 连接点/junction（0.8.2 起的自动挂载）只删链接本身，不动源目录；普通目录移入回收目录。
+ string? FindPluginDirectory(string id,string? rootDir) {
+  var candidates=new List<string>();
+  if(!string.IsNullOrWhiteSpace(rootDir))candidates.Add(rootDir);
+  candidates.Add(Path.Combine(InstanceStateRoot(),"extensions",id));
+  candidates.Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),".openclaw","extensions",id));
+  foreach(var dir in candidates)if(!string.IsNullOrWhiteSpace(dir)&&Directory.Exists(dir))return dir;
+  return null;
+ }
+ void RemovePluginDirectory(string id,string? rootDir) {
+  var dir=FindPluginDirectory(id,rootDir);
+  if(dir==null) { AddLog("未找到插件目录，已跳过文件移除："+id); return; }
+  if((File.GetAttributes(dir)&FileAttributes.ReparsePoint)!=0){Directory.Delete(dir,false);AddLog("已移除插件链接 "+dir);}
+  else {
+   var trash=Path.Combine(store.Root,"removed-plugins",DateTime.Now.ToString("yyyyMMdd-HHmmss")+"-"+id);
+   Directory.CreateDirectory(Path.GetDirectoryName(trash)!);Directory.Move(dir,trash);AddLog("插件已移到 "+trash+"（可手动移回恢复）；原位置 "+dir);
+  }
+ }
+ // 从实例配置里删掉该插件的 entries 项（找不到就跳过，不影响其他配置）。
+ void RemovePluginEntry(string id) {
+  var path=current.Config.Length>0?current.Config:Path.Combine(InstanceStateRoot(),"openclaw.json");
+  if(!File.Exists(path))return;
+  if(JsonNode.Parse(File.ReadAllText(path)) is not JsonObject root)return;
+  if(root["plugins"]?["entries"] is JsonObject entries&&entries.ContainsKey(id)) {
+   entries.Remove(id);File.WriteAllText(path,root.ToJsonString(new JsonSerializerOptions{WriteIndented=true}));AddLog("已从配置移除插件项 "+id);
+  }
  }
  void SkillPage() {
   pageTitle.Text="Skill 库";
@@ -395,10 +459,13 @@ public sealed partial class MainWindow : Window
   body.Children.Add(Card("实例名称与版本",Text("每个实例对应一个 OpenClaw 版本；把实例改名后再创建，即可让同一版本并存多个实例（如同 PCL 的多个存档）。"),Row(instanceName,Button("重命名",()=>{store.Rename(current,instanceName.Text);instancePicker.Items.Refresh();AddLog("实例已重命名为 "+current.Name);SelectPage(page);}),Button("复制实例",()=>{var clone=store.Duplicate(current,current.Name+" 副本");current=clone;channelCatalog=null;instancePicker.Items.Refresh();instancePicker.SelectedItem=clone;gateway=null;plugins=[];skills=[];channels=[];checkedAt=null;SelectPage(page);AddLog("已复制实例 "+clone.Name);})),Text("当前版本："+current.Version+"  ·  "+(current.Managed?"独立实例（独立配置与工作目录）":"已有安装（使用所选配置）"),12)));
   body.Children.Add(Toolbar(Text("以下插件、Skill 与整合包都只作用于当前实例「"+current.Name+"」；切换实例即切换该实例自己的一套。",12)));
   // —— 插件（本实例）：仿 PCL「mods」管理，列表内联、逐项可启用/禁用/删除 ——
-  body.Children.Add(Card("插件（本实例）",Text("共 "+plugins.Count+" 个 · 官方内置 "+plugins.Count(p=>p.Source=="bundled")+" · 自定义/外部 "+plugins.Count(p=>p.Source is not "" and not "bundled")+"。启用、禁用、删除只作用于「"+current.Name+"」。",12),Row(Button("↻ 刷新",()=>{if(!busy)_ = Refresh();}),Button("打开插件目录",OpenPluginFolder),Button("插件市场",()=>Navigate("插件管理"),true))));
+  // 进页时若还没数据就自动拉取（用 refreshCancellation 防重复/死循环），避免显示成误导性的「共 0 个」。
+  if(plugins.Count==0&&!busy&&refreshCancellation==null)_ = Refresh();
+  var loading=refreshCancellation!=null;
+  body.Children.Add(Card("插件（本实例）",Text(loading?"正在加载插件列表；首次扫描可能需要 1–2 分钟…":"共 "+plugins.Count+" 个 · 官方内置 "+plugins.Count(p=>p.Source=="bundled")+" · 自定义/外部 "+plugins.Count(p=>p.Source is not "" and not "bundled")+"。启用、禁用、删除只作用于「"+current.Name+"」。",12),Row(Button("↻ 刷新",()=>{if(!busy)_ = Refresh();}),Button("打开插件目录",OpenPluginFolder),Button("插件市场",()=>Navigate("插件管理"),true))));
   var pluginFilter=Input("",340);pluginFilter.ToolTip="按名称、状态或来源筛选";body.Children.Add(Toolbar(Label("筛选"),pluginFilter));
   var pluginPanel=new StackPanel();body.Children.Add(pluginPanel);
-  void RenderPlugins(){pluginPanel.Children.Clear();var q=pluginFilter.Text.Trim();var rows=plugins.Where(r=>q.Length==0||(r.Name+" "+r.State+" "+r.Source+" "+r.Detail).Contains(q,StringComparison.OrdinalIgnoreCase)).ToList();foreach(var r in rows)pluginPanel.Children.Add(PluginCard(r));if(rows.Count==0)pluginPanel.Children.Add(Toolbar(Text(plugins.Count==0?"尚未加载：点击「↻ 刷新」加载本实例的插件。":"没有匹配的插件。",12)));}
+  void RenderPlugins(){pluginPanel.Children.Clear();var q=pluginFilter.Text.Trim();var rows=plugins.Where(r=>q.Length==0||(r.Name+" "+r.State+" "+r.Source+" "+r.Detail).Contains(q,StringComparison.OrdinalIgnoreCase)).ToList();foreach(var r in rows)pluginPanel.Children.Add(PluginRow(r));if(rows.Count==0)pluginPanel.Children.Add(Toolbar(Text(plugins.Count==0?(loading?"正在加载插件列表；首次扫描可能需要 1–2 分钟…":"尚未加载：点击「↻ 刷新」加载本实例的插件。"):"没有匹配的插件。",12)));}
   pluginFilter.TextChanged+=(_,_)=>RenderPlugins();RenderPlugins();
   // —— Skill（本实例）：仿 PCL「资源包」管理 ——
   body.Children.Add(Card("Skill（本实例）",Text("共 "+skills.Count+" 个。启用、禁用、删除只作用于「"+current.Name+"」。",12),Row(Button("打开 Skills 目录",OpenSkillsFolder),Button("Skill 库",()=>Navigate("Skills 管理"),true))));

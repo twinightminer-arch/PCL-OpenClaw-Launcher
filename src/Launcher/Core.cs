@@ -365,7 +365,7 @@ public sealed class Runner
   } catch { return false; }
  }
 }
-public sealed record ItemRow(string Id,string Name,string State,string Detail,string Source="",string Account="",bool Enabled=false) {
+public sealed record ItemRow(string Id,string Name,string State,string Detail,string Source="",string Account="",bool Enabled=false,string RootDir="") {
  public string Indicator => State switch { "已连接" or "探测通过" or "已加载" or "壁纸库可用" => "#248B69", "连接异常" or "未连接" or "检测失败" or "加载失败" => "#D9363E", _ when State.Contains("未验证") => "#C58B20", _ => "#999999" };
 }
 public static class ReadModel
@@ -374,7 +374,8 @@ public static class ReadModel
  public static bool? B(JsonNode? node,string key) => node?[key] is JsonValue value && value.TryGetValue<bool>(out var b)?b:null;
  public static List<ItemRow> Plugins(JsonNode? json) {
   if(json?["plugins"] is not JsonArray list)throw new Exception("插件列表返回了不支持的数据格式。");
-  return list.Where(n=>n!=null).Select(n=>new ItemRow(S(n,"id"),S(n,"name",S(n,"id")),S(n,"status") switch {"loaded"=>"已加载","disabled"=>"已禁用","error"=>"加载失败",var v=>v.Length>0?v:"未确认"},SafeLog.Clean(S(n,"error",S(n,"description"))),S(n,"origin"),Enabled:B(n,"enabled")==true)).ToList();
+  // rootDir = OpenClaw 报告的插件真实目录（全局插件会指向 ~/.openclaw/extensions），删除时按它精准定位。
+  return list.Where(n=>n!=null).Select(n=>new ItemRow(S(n,"id"),S(n,"name",S(n,"id")),S(n,"status") switch {"loaded"=>"已加载","disabled"=>"已禁用","error"=>"加载失败",var v=>v.Length>0?v:"未确认"},SafeLog.Clean(S(n,"error",S(n,"description"))),S(n,"origin"),Enabled:B(n,"enabled")==true,RootDir:S(n,"rootDir"))).ToList();
  }
  public static List<ItemRow> Skills(JsonNode? json) {
   if(json?["skills"] is not JsonArray list)throw new Exception("Skills 返回了不支持的数据格式。");

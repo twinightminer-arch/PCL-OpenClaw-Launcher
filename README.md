@@ -27,6 +27,9 @@
 - **Wallpaper 卡顿修复（v0.3.1）**：OpenClaw 由空闲转入思考/工作态时控制台动态壁纸会卡住，已通过把视频层提升为 GPU 合成层并自动恢复暂停的视频修复。
 - **导航精简 +「关于」归位（v0.8.3）**：顶端导航栏去掉「实例」标签，恢复为 **启动 / 下载 / 连接 / 设置 / 关于**；「关于」重新成为独立顶端导航项（0.8.2 曾误并入「设置」，本版还原），其组内仍含「操作日志」。
 - **实例设置入口收敛（v0.8.3）**：实例设置只保留**启动页侧栏**这一个入口（作用于当前所选实例），打开后顶端导航栏照常显示。
+- **插件管理重做为横向条目（v0.8.4）**：参照 PCL 的「实例 Mod 管理」，每个插件一行——左侧状态指示灯（绿=启用 / 灰=禁用 / 红=异常）、中间名称与「状态 · 来源」，右侧开关与删除按钮，不再用竖排卡片。
+- **插件开关 / 删除真正写入（v0.8.4）**：开关直接调用 `openclaw plugins enable|disable <id>` 并写回实例配置 `plugins.entries.<id>.enabled`；删除先由 OpenClaw 卸载，若插件仍在列表中（手动放入的插件没有安装记录，或全局扩展被再次发现），按 `plugins list` 报告的 `rootDir` 兜底移除目录——普通目录移入启动器回收目录 `removed-plugins/` 可手动移回，目录连接点只删链接不会误删源目录——并清理配置条目。
+- **修复「共 0 个」误导（v0.8.4）**：进入插件 / 实例设置页时若列表尚未加载会自动拉取，加载期间显示「正在加载插件列表…」而不是空白的「共 0 个」；同时避免导航时重复刷新导致列表反复抖动。
 
 ## 目录结构
 
@@ -37,7 +40,7 @@ PCL-OpenClaw-Launcher/
 │   ├── PclControls/          # 由 PCL 移植的 WPF 控件（VB.NET）
 │   ├── Tests/                # 测试项目
 │   └── NuGet.Config
-├── app-v0.2/ ~ app-v0.8.3/   # 各版本已编译发布（可直接运行）
+├── app-v0.2/ ~ app-v0.8.4/   # 各版本已编译发布（可直接运行）
 ├── installers/<版本>/         # 各版本 Inno Setup 安装包
 ├── installer/                # 安装脚本（模板 ocl.iss.tmpl、生成器 gen-iss.py、各版本 ocl-*.iss）
 ├── plugins/wallpaper-engine/ # OpenClaw 壁纸插件
@@ -79,6 +82,7 @@ PCL-OpenClaw-Launcher/
 | v0.8.1 | `app-v0.8.1/` |
 | v0.8.2 | `app-v0.8.2/` |
 | v0.8.3 | `app-v0.8.3/` |
+| v0.8.4 | `app-v0.8.4/` |
 
 每个目录均含可直接运行的 `PCL-OpenClaw-Launcher.exe`（随附 `PclControls.dll` 等依赖）。
 
@@ -97,6 +101,7 @@ PCL-OpenClaw-Launcher/
 | v0.8.1 | `OCL-0.8.1-Setup.exe` |
 | v0.8.2 | `OCL-0.8.2-Setup.exe` |
 | v0.8.3 | `OCL-0.8.3-Setup.exe` |
+| v0.8.4 | `OCL-0.8.4-Setup.exe` |
 
 安装包只包含可执行文件、依赖、图标与打赏页资源，**不含**任何个人配置、密钥或源码。脚本见 `installer/ocl.iss.tmpl`（模板）与 `installer/ocl-*.iss`（各版本），生成脚本 `installer/gen-iss.py`。
 
