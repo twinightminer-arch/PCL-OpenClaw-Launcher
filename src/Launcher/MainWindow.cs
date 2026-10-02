@@ -94,12 +94,13 @@ public sealed partial class MainWindow : Window
   bool Valid()=>!closing&&!token.IsCancellationRequested&&generation==refreshGeneration&&current==selected&&page==destination;
   async Task<JsonNode> Query(params string[] args){var result=await runner.Run(selected,args,150,token);token.ThrowIfCancellationRequested();if(!result.Ok)throw new Exception(result.Summary);return result.Json()??throw new Exception("命令没有返回有效 JSON。");}
   try {
-   if(destination is not ("启动总览" or "软件连接" or "插件管理" or "Skills 管理"))return;
+   if(destination is not ("启动总览" or "软件连接" or "插件管理" or "Skills 管理" or "实例设置"))return;
    status.Text="正在检测；首次扫描可能需要 1–2 分钟，可切换页面或取消…";
    pageErrors.Remove(selected.Id+destination);
    if(destination=="启动总览") {var value=await Query("gateway","status","--json");if(!Valid())return;gateway=value;}
-   if(destination=="插件管理"){var value=ReadModel.Plugins(await Query("plugins","list","--json"));if(!Valid())return;plugins=value;}
-   if(destination=="Skills 管理"){var value=ReadModel.Skills(await Query("skills","list","--json"));if(!Valid())return;skills=value;}
+   // 实例设置页内联管理插件与 Skill（仿 PCL 每实例管理 mods / 资源包），因此同样需要这两份列表。
+   if(destination is "插件管理" or "实例设置"){var value=ReadModel.Plugins(await Query("plugins","list","--json"));if(!Valid())return;plugins=value;}
+   if(destination is "Skills 管理" or "实例设置"){var value=ReadModel.Skills(await Query("skills","list","--json"));if(!Valid())return;skills=value;}
    if(destination=="软件连接") {
     JsonNode? catalog=channelCatalog,live=null;var failures=new List<string>();
     try{catalog=await Query("channels","list","--all","--json");}catch(Exception e) when(e is not OperationCanceledException){failures.Add("应用列表："+SafeLog.Clean(e.Message));}
@@ -392,7 +393,21 @@ public sealed partial class MainWindow : Window
   var node=Input(store.Settings.Node,510);var state=Input(current.State,510);var config=Input(current.Config,510);
   var instanceName=Input(current.Name,280);
   body.Children.Add(Card("实例名称与版本",Text("每个实例对应一个 OpenClaw 版本；把实例改名后再创建，即可让同一版本并存多个实例（如同 PCL 的多个存档）。"),Row(instanceName,Button("重命名",()=>{store.Rename(current,instanceName.Text);instancePicker.Items.Refresh();AddLog("实例已重命名为 "+current.Name);SelectPage(page);}),Button("复制实例",()=>{var clone=store.Duplicate(current,current.Name+" 副本");current=clone;channelCatalog=null;instancePicker.Items.Refresh();instancePicker.SelectedItem=clone;gateway=null;plugins=[];skills=[];channels=[];checkedAt=null;SelectPage(page);AddLog("已复制实例 "+clone.Name);})),Text("当前版本："+current.Version+"  ·  "+(current.Managed?"独立实例（独立配置与工作目录）":"已有安装（使用所选配置）"),12)));
-  body.Children.Add(Card("扩展资源管理",Text("插件、Skill 与整合包都只作用于当前实例「"+current.Name+"」；切换实例即切换该实例自己的扩展与配置。"),Row(Button("插件市场",()=>Navigate("插件管理"),true),Button("Skill 库",()=>Navigate("Skills 管理")),Button("整合包",()=>Navigate("整合包")))));
+  body.Children.Add(Toolbar(Text("以下插件、Skill 与整合包都只作用于当前实例「"+current.Name+"」；切换实例即切换该实例自己的一套。",12)));
+  // —— 插件（本实例）：仿 PCL「mods」管理，列表内联、逐项可启用/禁用/删除 ——
+  body.Children.Add(Card("插件（本实例）",Text("共 "+plugins.Count+" 个 · 官方内置 "+plugins.Count(p=>p.Source=="bundled")+" · 自定义/外部 "+plugins.Count(p=>p.Source is not "" and not "bundled")+"。启用、禁用、删除只作用于「"+current.Name+"」。",12),Row(Button("↻ 刷新",()=>{if(!busy)_ = Refresh();}),Button("打开插件目录",OpenPluginFolder),Button("插件市场",()=>Navigate("插件管理"),true))));
+  var pluginFilter=Input("",340);pluginFilter.ToolTip="按名称、状态或来源筛选";body.Children.Add(Toolbar(Label("筛选"),pluginFilter));
+  var pluginPanel=new StackPanel();body.Children.Add(pluginPanel);
+  void RenderPlugins(){pluginPanel.Children.Clear();var q=pluginFilter.Text.Trim();var rows=plugins.Where(r=>q.Length==0||(r.Name+" "+r.State+" "+r.Source+" "+r.Detail).Contains(q,StringComparison.OrdinalIgnoreCase)).ToList();foreach(var r in rows)pluginPanel.Children.Add(PluginCard(r));if(rows.Count==0)pluginPanel.Children.Add(Toolbar(Text(plugins.Count==0?"尚未加载：点击「↻ 刷新」加载本实例的插件。":"没有匹配的插件。",12)));}
+  pluginFilter.TextChanged+=(_,_)=>RenderPlugins();RenderPlugins();
+  // —— Skill（本实例）：仿 PCL「资源包」管理 ——
+  body.Children.Add(Card("Skill（本实例）",Text("共 "+skills.Count+" 个。启用、禁用、删除只作用于「"+current.Name+"」。",12),Row(Button("打开 Skills 目录",OpenSkillsFolder),Button("Skill 库",()=>Navigate("Skills 管理"),true))));
+  var skillFilter=Input("",340);skillFilter.ToolTip="按名称、状态或来源筛选";body.Children.Add(Toolbar(Label("筛选"),skillFilter));
+  var skillPanel=new StackPanel();body.Children.Add(skillPanel);
+  void RenderSkills(){skillPanel.Children.Clear();var q=skillFilter.Text.Trim();var rows=skills.Where(r=>q.Length==0||(r.Name+" "+r.State+" "+r.Source+" "+r.Detail).Contains(q,StringComparison.OrdinalIgnoreCase)).ToList();foreach(var r in rows)skillPanel.Children.Add(SkillCard(r));if(rows.Count==0)skillPanel.Children.Add(Toolbar(Text(skills.Count==0?"尚未加载：点击「↻ 刷新」加载本实例的 Skill。":"没有匹配的 Skill。",12)));}
+  skillFilter.TextChanged+=(_,_)=>RenderSkills();RenderSkills();
+  // —— 整合包（本实例）——
+  body.Children.Add(Card("整合包（本实例）",Text("导出本实例的版本、插件与 Skill 启停清单；导入时创建独立实例逐项安装。账号凭据不随整合包导出。",12),Row(AsyncButton("导出 .clawpack.json",ExportPack,true),AsyncButton("选择并预览整合包",ImportPack))));
   body.Children.Add(Card("新实例默认插件集",Text("下载/创建新实例时只携带这里的“必要插件”，其余由用户自行安装或制作。以当前实例为模板采集最省事。"),Row(AsyncButton("照搬当前实例",CaptureDefaultPlugins,true),Button("清空默认集",()=>{store.Settings.DefaultPlugins=[];store.Save();SelectPage(page);})),Text(store.Settings.DefaultPlugins.Count==0?"尚未采集默认插件集：新实例将不携带任何插件。":"已采集 "+store.Settings.DefaultPlugins.Count+" 个默认插件："+string.Join("、",store.Settings.DefaultPlugins.Take(8))+(store.Settings.DefaultPlugins.Count>8?" …":""),11,"#999999")));
   body.Children.Add(Card("运行环境与配置",Text("Node.js 可执行文件"),node,Text("OpenClaw 状态目录（留空使用默认目录）"),state,Text("配置文件路径（留空使用默认规则；不是程序目录里的任意 JSON）"),config,Row(Button("选择配置文件",()=>{var dialog=new OpenFileDialog{Filter="配置文件|*.json;*.json5|所有文件|*.*"};if(dialog.ShowDialog(this)==true)config.Text=dialog.FileName;}),Button("保存",()=>{
    if(owned.TryGetValue(current.Id,out var p)&&!p.HasExited)throw new Exception("请先停止该实例网关，再修改运行设置。");
