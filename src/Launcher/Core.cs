@@ -50,6 +50,8 @@ public sealed class Appearance
  public bool MusicRepeat {get;set;}=true;
  public double MusicVolume {get;set;}=0.35;
  public List<string> Playlist {get;set;}=[];
+ // 桌面快捷方式图标："ocl" / "openclaw"，空串表示跟随 exe 默认图标。
+ public string ShortcutIcon {get;set;}="";
 }
 public sealed class Store
 {
@@ -143,7 +145,14 @@ public sealed class Store
    dynamic shell=Activator.CreateInstance(shellType)!;
    dynamic shortcut=shell.CreateShortcut(link);
    shortcut.TargetPath=exe;shortcut.WorkingDirectory=Path.GetDirectoryName(exe)??AppContext.BaseDirectory;
-   shortcut.IconLocation=exe;shortcut.Description="PCL · OpenClaw Launcher";shortcut.Save();
+   // 桌面图标可在「快捷方式图标」页切换：openclaw=角色图标，ocl=OCL 六边形，空=跟随 exe 内置图标。
+   var icon=Settings.Appearance.ShortcutIcon switch {
+    "openclaw"=>Path.Combine(AppContext.BaseDirectory,"Assets","openclaw.ico"),
+    "ocl"=>Path.Combine(AppContext.BaseDirectory,"Assets","ocl.ico"),
+    _=>exe
+   };
+   if(icon!=exe&&!File.Exists(icon))icon=exe;
+   shortcut.IconLocation=icon;shortcut.Description="PCL · OpenClaw Launcher";shortcut.Save();
   } catch(Exception e) { try { File.AppendAllText(Path.Combine(Root,"shortcut-error.log"),link+"："+e.Message+Environment.NewLine); } catch(IOException) {} }
  }
  public void Save() {
@@ -270,6 +279,38 @@ public sealed class Runner
   p.OutputDataReceived+=(_,e)=> {if(e.Data!=null)output(SafeLog.Clean(e.Data));};
   p.ErrorDataReceived+=(_,e)=> {if(e.Data!=null)output(SafeLog.Clean(e.Data));};
   p.Start();p.StandardInput.Close();p.BeginOutputReadLine();p.BeginErrorReadLine();return p;
+ }
+ // OpenClaw 对 Node 的硬性要求：>=22.22.3 且 <23，或 >=24.15.0 且 <25，或 >=25.9.0。
+ // 默认 "node.exe" 在部分机器上会解析到不满足要求的版本（如 22.22.2），导致所有查询失败、列表为空。
+ // 这里优先用已配置路径；不可用或不兼容时，依次探测常见安装位置与 PATH，挑第一个兼容的。
+ public static string ResolveNode(string preferred) {
+  var candidates=new List<string>();
+  if(!string.IsNullOrWhiteSpace(preferred))candidates.Add(preferred);
+  candidates.Add(@"C:\Program Files\nodejs\node.exe");
+  candidates.Add(@"C:\Program Files (x86)\nodejs\node.exe");
+  foreach(var p in (Environment.GetEnvironmentVariable("PATH")??"").Split(Path.PathSeparator,StringSplitOptions.RemoveEmptyEntries))
+   try { var full=Path.Combine(p,"node.exe"); if(File.Exists(full))candidates.Add(full); } catch {}
+  string? fallback=null;
+  foreach(var c in candidates.Distinct(StringComparer.OrdinalIgnoreCase)) {
+   if(!File.Exists(c))continue;
+   if(fallback==null)fallback=c;
+   if(NodeCompatible(c))return c;
+  }
+  return fallback??preferred??"node.exe";
+ }
+ static bool NodeCompatible(string node) {
+  try {
+   var psi=new ProcessStartInfo(node){UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true};
+   psi.ArgumentList.Add("--version");
+   using var p=new Process{StartInfo=psi};p.Start();
+   var v=p.StandardOutput.ReadToEndAsync().WaitAsync(TimeSpan.FromSeconds(10)).GetAwaiter().GetResult();p.WaitForExit(10000);
+   var m=Regex.Match(v??"",@"v?(\d+)\.(\d+)\.(\d+)");
+   if(!m.Success)return false;
+   var maj=int.Parse(m.Groups[1].Value);var min=int.Parse(m.Groups[2].Value);var pat=int.Parse(m.Groups[3].Value);
+   bool Ge(int a,int b,int c)=>(maj>a)||(maj==a&&min>b)||(maj==a&&min==b&&pat>=c);
+   bool Lt(int a,int b,int c)=>(maj<a)||(maj==a&&min<b)||(maj==a&&min==b&&pat<c);
+   return (Ge(22,22,3)&&Lt(23,0,0))||(Ge(24,15,0)&&Lt(25,0,0))||Ge(25,9,0);
+  } catch { return false; }
  }
 }
 public sealed record ItemRow(string Id,string Name,string State,string Detail,string Source="",string Account="",bool Enabled=false) {

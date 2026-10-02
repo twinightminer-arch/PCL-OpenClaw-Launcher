@@ -1,6 +1,7 @@
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Effects;
 using System.Windows.Media.Imaging;
@@ -67,5 +68,32 @@ public sealed partial class MainWindow
   list.MouseDoubleClick+=(_,_)=>{if(list.SelectedIndex>=0)PlayTrack(list.SelectedIndex);};
   body.Children.Add(Card("背景音乐",trackLabel,Row(Button("上一首",()=>PlayTrack(trackIndex-1)),Button("播放",()=>PlayTrack(list.SelectedIndex>=0?list.SelectedIndex:0),true),Button("暂停 / 继续",()=>{if(musicPaused){media.Play();musicPaused=false;}else{media.Pause();musicPaused=true;}}),Button("下一首",NextTrack),Button("停止",()=>{media.Stop();musicPaused=false;musicBadge.Text="♫  已停止";trackLabel.Text="播放已停止";})),SliderRow("音量",a.MusicVolume*100,0,100,v=>{a.MusicVolume=v/100;media.Volume=v/100;},"%"),Toggle("启动时自动播放",a.MusicAutoPlay,v=>{a.MusicAutoPlay=v;store.Save();}),Toggle("循环播放列表",a.MusicRepeat,v=>{a.MusicRepeat=v;store.Save();}),Toggle("随机播放",a.MusicShuffle,v=>{a.MusicShuffle=v;store.Save();})));
   body.Children.Add(Card("播放列表",list,Row(Button("添加音乐",()=>{var dialog=new OpenFileDialog{Filter="音乐|*.mp3;*.wav;*.m4a;*.wma;*.aac|所有文件|*.*",Multiselect=true};if(dialog.ShowDialog(this)!=true)return;foreach(var path in dialog.FileNames)if(!a.Playlist.Contains(path,StringComparer.OrdinalIgnoreCase))a.Playlist.Add(path);store.Save();SelectPage(page);}),Button("移除所选",()=>{if(list.SelectedIndex<0)return;media.Stop();a.Playlist.RemoveAt(list.SelectedIndex);trackIndex=-1;musicBadge.Text="♫  已停止";store.Save();SelectPage(page);})),Text("使用 Windows 媒体解码器；不支持的编码会在日志中显示。音乐文件保持原位置。",11,"#999999")));
+ }
+ void ShortcutIconPage() {
+  pageTitle.Text="快捷方式图标";
+  pageNote.Text="选择桌面快捷方式（OCL.lnk）显示的图标；点「确定并应用」后立即更换，无需重启启动器。";
+  var chosen=store.Settings.Appearance.ShortcutIcon;
+  Border? cardOcl=null,cardOpen=null;
+  var oclSrc=(ImageSource)Brand.Image();
+  var openSrc=new System.Windows.Media.Imaging.BitmapImage(new Uri(Path.Combine(AppContext.BaseDirectory,"Assets","openclaw.png")));
+  Border Make(string key,ImageSource art,string caption) {
+   var border=new Border{Width=132,Height=152,Margin=new Thickness(0,0,18,0),CornerRadius=new CornerRadius(8),BorderThickness=new Thickness(3),Background=Brushes.White,Padding=new Thickness(12,12,12,10),Cursor=Cursors.Hand};
+   var stack=new StackPanel{Orientation=Orientation.Vertical};
+   var holder=new Border{Width=86,Height=86,Margin=new Thickness(0,0,0,9),HorizontalAlignment=HorizontalAlignment.Center};holder.Child=new Image{Source=art,Width=86,Height=86,Stretch=Stretch.Uniform};stack.Children.Add(holder);
+   stack.Children.Add(Text(caption,13,"#444444"));
+   border.Child=stack;border.MouseLeftButtonDown+=(_,_)=>{chosen=key;Sync();};
+   var tick=new TextBlock{Text="✓ 已选",FontSize=11,Foreground=Brush(store.Settings.Appearance.Accent),HorizontalAlignment=HorizontalAlignment.Center,Margin=new Thickness(0,4,0,0)};stack.Children.Add(tick);
+   return border;
+  }
+  void Sync() {
+   if(cardOcl!=null)cardOcl.BorderBrush=Brush(chosen=="ocl"?store.Settings.Appearance.Accent:"#DDDDDD");
+   if(cardOpen!=null)cardOpen.BorderBrush=Brush(chosen=="openclaw"?store.Settings.Appearance.Accent:"#DDDDDD");
+  }
+  cardOcl=Make("ocl",oclSrc,"OCL（六边形）");
+  cardOpen=Make("openclaw",openSrc,"OpenClaw（角色）");
+  var row=new WrapPanel{Children={cardOcl,cardOpen}};
+  body.Children.Add(Card("选择图标",Text("OCL 启动器自带两种图标，挑一个作为桌面快捷方式。下一次启动也会自动按此设置重写。",12),row));
+  body.Children.Add(Card("应用",Text("确定后立即把桌面 OCL.lnk 的图标换成所选样式；若要换回程序默认图标，选「恢复默认」再应用。",12),Row(AsyncButton("确定并应用",async()=>{store.Settings.Appearance.ShortcutIcon=chosen;store.Save();store.EnsureDesktopShortcut();AddLog("桌面快捷方式图标已切换为："+(chosen=="openclaw"?"OpenClaw 角色":chosen=="ocl"?"OCL 六边形":"程序默认"));status.Text="桌面图标已更换 · "+DateTime.Now.ToString("HH:mm:ss");},true),Button("恢复默认（跟随程序）",()=>{chosen="";Sync();}))));
+  Sync();
  }
 }

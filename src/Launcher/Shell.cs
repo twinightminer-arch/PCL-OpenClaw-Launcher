@@ -15,7 +15,7 @@ public sealed partial class MainWindow
  readonly TextBlock musicBadge=new();
  ColumnDefinition sidebarColumn=new();
  Border contentPane=new();
- string GroupFor(string value)=>value switch {"版本下载" or "版本与实例"=>"下载","软件连接"=>"连接","个性化" or "背景音乐" or "设置与关于" or "插件管理" or "Skills 管理" or "整合包"=>"设置","操作日志" or "关于"=>"更多",_=>"启动"};
+ string GroupFor(string value)=>value switch {"版本下载" or "版本与实例" or "插件管理" or "Skills 管理"=>"下载","软件连接"=>"连接","个性化" or "背景音乐" or "设置与关于" or "整合包" or "快捷方式图标"=>"设置","操作日志" or "关于"=>"更多",_=>"启动"};
  void Navigate(string destination) {refreshCancellation?.Cancel();SelectPage(destination);if(!busy&&(!refreshTimes.TryGetValue(current.Id+destination,out var time)||DateTime.Now-time>TimeSpan.FromSeconds(60)))_ = Refresh();}
  void BuildShell() {
   WindowStyle=WindowStyle.None;AllowsTransparency=true;Background=Brushes.Transparent;ResizeMode=ResizeMode.CanResize;
@@ -60,9 +60,9 @@ public sealed partial class MainWindow
   var currentBox=new StackPanel{Margin=new Thickness(12)};currentBox.Children.Add(Text("当前实例",11,"#999999"));instancePicker.Width=152;instancePicker.Margin=new Thickness(0);currentBox.Children.Add(instancePicker);DockPanel.SetDock(currentBox,Dock.Bottom);dock.Children.Add(currentBox);
   var menu=new StackPanel{Margin=new Thickness(0,12,0,0)};dock.Children.Add(menu);
   var entries=GroupFor(page) switch {
-   "下载"=>new[]{("自动安装","版本下载","⬡"),("本地实例","版本与实例","▣")},
+   "下载"=>new[]{("自动安装","版本下载","⬡"),("本地实例","版本与实例","▣"),("插件市场","插件管理","◇"),("Skill 库","Skills 管理","✧")},
    "连接"=>new[]{("软件连接","软件连接","◎"),("网关设置","设置与关于","⚙")},
-   "设置"=>new[]{("实例设置","设置与关于","⚙"),("插件","插件管理","◇"),("Skills","Skills 管理","✧"),("整合包","整合包","▤"),("个性化","个性化","✦"),("背景音乐","背景音乐","♫")},
+   "设置"=>new[]{("实例设置","设置与关于","⚙"),("整合包","整合包","▤"),("个性化","个性化","✦"),("背景音乐","背景音乐","♫"),("快捷方式图标","快捷方式图标","⬡")},
    _=>new[]{("关于","关于","ⓘ"),("操作日志","操作日志","≡")}
   };
   foreach(var (label,destination,glyph) in entries) {
@@ -84,7 +84,21 @@ public sealed partial class MainWindow
  UIElement Card(string title,params UIElement[] contents) {
   // PCL MyCard: 5px corners, 3px shadow, 13px title, 15px inset; Minecraft virtualization removed.
   var grid=new Grid{Margin=new Thickness(0,0,0,15)};grid.Children.Add(new PclControls.MyDropShadow{Color=Color.FromArgb(18,0,0,0),ShadowRadius=3,CornerRadius=new CornerRadius(5),Margin=new Thickness(-3)});
-  var stack=new StackPanel();if(title.Length>0){var heading=Text(title,13,"#4B4B4B");heading.FontWeight=FontWeights.Bold;heading.Margin=new Thickness(0,0,0,14);stack.Children.Add(heading);}foreach(var child in contents)stack.Children.Add(child);var border=new Border{CornerRadius=new CornerRadius(5),Padding=new Thickness(16,13,16,12),Child=stack};border.SetResourceReference(Border.BackgroundProperty,"CardBrush");grid.Children.Add(border);return grid;
+  var stack=new StackPanel();if(title.Length>0){var heading=Text(title,13,"#4B4B4B");heading.FontWeight=FontWeights.Bold;heading.Margin=new Thickness(0,0,0,14);stack.Children.Add(heading);}foreach(var child in contents)stack.Children.Add(child);  var border=new Border{CornerRadius=new CornerRadius(5),Padding=new Thickness(16,13,16,12),Child=stack};border.SetResourceReference(Border.BackgroundProperty,"CardBrush");grid.Children.Add(border);return grid;
+ }
+ // PCL 风格开关：开启=蓝色，关闭=灰色；点击切换并回调新状态。
+ UIElement Switch(bool on,Action<bool> changed) {
+  var track=new Border{Width=46,Height=24,CornerRadius=new CornerRadius(12),Background=Brush(on?"#1E6FE8":"#BBBBBB"),Cursor=Cursors.Hand,VerticalAlignment=VerticalAlignment.Center};
+  var knob=new System.Windows.Shapes.Ellipse{Width=18,Height=18,Fill=Brushes.White,VerticalAlignment=VerticalAlignment.Center};
+  var dock=new DockPanel{LastChildFill=false};DockPanel.SetDock(knob,Dock.Left);dock.Children.Add(knob);track.Child=dock;
+  bool state=on;knob.Margin=new Thickness(on?23:3,0,0,0);
+  track.MouseLeftButtonDown+=(_,_)=>{state=!state;track.Background=Brush(state?"#1E6FE8":"#BBBBBB");knob.Margin=new Thickness(state?23:3,0,0,0);changed(state);};
+  return track;
+ }
+ UIElement SwitchWithLabel(bool on,Action<bool> changed) {
+  var panel=new WrapPanel{VerticalAlignment=VerticalAlignment.Center};var label=new TextBlock{Text=on?"已启用":"已禁用",FontSize=12,VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(0,0,8,0),Foreground=Brush(on?"#1E6FE8":"#888888")};
+  var track=Switch(on,_=>{label.Text=_.ToString()=="True"?"已启用":"已禁用";label.Foreground=Brush(_?"#1E6FE8":"#888888");changed(_);});
+  panel.Children.Add(track);panel.Children.Add(label);return panel;
  }
  void Overview() {
   var online=ReadModel.B(gateway?["rpc"],"ok")==true;
