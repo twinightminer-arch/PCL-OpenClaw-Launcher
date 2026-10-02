@@ -15,7 +15,7 @@ public sealed partial class MainWindow
  readonly TextBlock musicBadge=new();
  ColumnDefinition sidebarColumn=new();
  Border contentPane=new();
- string GroupFor(string value)=>value switch {"版本下载" or "版本与实例"=>"下载","软件连接"=>"连接","实例设置" or "插件管理" or "Skills 管理" or "整合包"=>"实例","个性化" or "背景音乐" or "快捷方式图标" or "关于" or "操作日志"=>"设置",_=>"启动"};
+ string GroupFor(string value)=>value switch {"版本下载" or "版本与实例"=>"下载","软件连接"=>"连接","实例设置" or "插件管理" or "Skills 管理" or "整合包"=>"实例","个性化" or "背景音乐" or "快捷方式图标"=>"设置","关于" or "操作日志"=>"关于",_=>"启动"};
  void Navigate(string destination) {refreshCancellation?.Cancel();SelectPage(destination);if(!busy&&(!refreshTimes.TryGetValue(current.Id+destination,out var time)||DateTime.Now-time>TimeSpan.FromSeconds(60)))_ = Refresh();}
  void BuildShell() {
   WindowStyle=WindowStyle.None;AllowsTransparency=true;Background=Brushes.Transparent;ResizeMode=ResizeMode.CanResize;
@@ -28,7 +28,9 @@ public sealed partial class MainWindow
   var titleContent=new Grid();titleContent.ColumnDefinitions.Add(new(){Width=new GridLength(1,GridUnitType.Star)});titleContent.ColumnDefinitions.Add(new(){Width=GridLength.Auto});titleContent.ColumnDefinitions.Add(new(){Width=new GridLength(1,GridUnitType.Star)});
   var logo=Text("OCL",19,"#FFFFFF");logo.FontFamily=new FontFamily("Arial");logo.FontWeight=FontWeights.SemiBold;logo.Margin=new Thickness(19,0,0,0);logo.VerticalAlignment=VerticalAlignment.Center;logo.SetBinding(TextBlock.TextProperty,new System.Windows.Data.Binding("TitleText"){Source=store.Settings.Appearance});titleContent.Children.Add(logo);
   var tabs=new StackPanel{Orientation=Orientation.Horizontal,VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(13,0,13,0)};Grid.SetColumn(tabs,1);titleContent.Children.Add(tabs);
-  var groups=new[]{"启动","下载","连接","实例","设置"};var destinations=new[]{"启动总览","版本下载","软件连接","实例设置","个性化"};
+  // 0.8.3：顶端导航栏去掉「实例」；「关于」恢复为独立导航项（0.8.2 曾误并入「设置」，已还原）。
+  // 打开实例设置后顶端导航栏照常显示。
+  var groups=new[]{"启动","下载","连接","设置","关于"};var destinations=new[]{"启动总览","版本下载","软件连接","个性化","关于"};
   for(int i=0;i<groups.Length;i++) {
    var destination=destinations[i];var button=Button("",()=>Navigate(destination));button.Style=(Style)FindResource("TitleButton");
    var row=new StackPanel{Orientation=Orientation.Horizontal};row.Children.Add(new System.Windows.Shapes.Path{Data=Geometry.Parse(PclGlyphs.Title[i]),Fill=Brushes.White,Width=14,Height=14,Stretch=Stretch.Uniform,VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(0,0,7,0)});row.Children.Add(new TextBlock{Text=groups[i],Foreground=Brushes.White,VerticalAlignment=VerticalAlignment.Center});button.Content=row;topButtons[groups[i]]=button;tabs.Children.Add(button);
@@ -62,8 +64,10 @@ public sealed partial class MainWindow
   var entries=GroupFor(page) switch {
    "下载"=>new[]{("自动安装","版本下载","⬡"),("本地实例","版本与实例","▣")},
    "连接"=>new[]{("软件连接","软件连接","◎")},
-   "实例"=>new[]{("实例设置","实例设置","⚙"),("插件市场","插件管理","◇"),("Skill 库","Skills 管理","✧"),("整合包","整合包","▤")},
-   "设置"=>new[]{("个性化","个性化","✦"),("背景音乐","背景音乐","♫"),("快捷方式图标","快捷方式图标","⬡"),("关于","关于","ⓘ"),("操作日志","操作日志","≡")},
+   // 0.8.3：侧栏同样不再提供「实例设置」入口（唯一入口在启动页），此处仅用于在扩展资源页之间切换。
+   "实例"=>new[]{("插件市场","插件管理","◇"),("Skill 库","Skills 管理","✧"),("整合包","整合包","▤")},
+   "设置"=>new[]{("个性化","个性化","✦"),("背景音乐","背景音乐","♫"),("快捷方式图标","快捷方式图标","⬡")},
+   "关于"=>new[]{("关于","关于","ⓘ"),("操作日志","操作日志","≡")},
    _=>new[]{("关于","关于","ⓘ"),("操作日志","操作日志","≡")}
   };
   foreach(var (label,destination,glyph) in entries) {
@@ -112,9 +116,8 @@ public sealed partial class MainWindow
   body.Children.Add(Card("启动器",Text("OCL "+Brand.Version+"  ·  PCL 风格 OpenClaw 独立启动器",12),Text("PCL 原作者：龙腾猫跃。本程序为第三方独立二次创作。",11,"#999999")));
  }
  UIElement InstanceList() {
+  // 0.8.3：这里不再放「设置」按钮——实例设置的唯一入口是启动页侧栏。
   var stack=new StackPanel();foreach(var item in store.Settings.Instances.ToList()) {var dock=new DockPanel{Margin=new Thickness(0,0,0,8)};
-   // 每实例「设置」：选中该实例并进入其专属实例设置页（仿 PCL 每个存档独立的设置入口）。
-   var settings=Button("设置",()=>{if(busy)return;instancePicker.SelectedItem=item;Navigate("实例设置");});DockPanel.SetDock(settings,Dock.Right);dock.Children.Add(settings);
    var choose=Button(item==current?"当前实例":"选择",()=>{instancePicker.SelectedItem=item;});DockPanel.SetDock(choose,Dock.Right);dock.Children.Add(choose);
    var labels=new StackPanel();labels.Children.Add(Text(item.Name,13,"#444444"));labels.Children.Add(Text(item.Version+"  ·  "+(item.Managed?"独立配置":"已有配置"),11,"#999999"));dock.Children.Add(labels);stack.Children.Add(dock);}return stack;
  }

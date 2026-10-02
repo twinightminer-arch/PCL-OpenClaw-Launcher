@@ -25,6 +25,8 @@
 - **连接页面重做（v0.8.2）**：分为「插件链接」（Wallpaper Engine 走插件直连）与「API 密钥链接（Token）」（微信 / QQ / Telegram 已连接，Signal / Line / Discord 可连接但尚未接入）；两类均带「检测连接」按钮与绿/黄/红/灰状态指示灯。
 - **Wallpaper 插件可见性修复（v0.8.2）**：受管实例原本在插件列表里看不到自带的 wallpaper-engine；现已在创建/复制实例时自动以目录连接挂入实例扩展目录并写入启用配置，也可在「软件连接 → Wallpaper Engine」卡片点「修复插件」手动修复。
 - **Wallpaper 卡顿修复（v0.3.1）**：OpenClaw 由空闲转入思考/工作态时控制台动态壁纸会卡住，已通过把视频层提升为 GPU 合成层并自动恢复暂停的视频修复。
+- **导航精简 +「关于」归位（v0.8.3）**：顶端导航栏去掉「实例」标签，恢复为 **启动 / 下载 / 连接 / 设置 / 关于**；「关于」重新成为独立顶端导航项（0.8.2 曾误并入「设置」，本版还原），其组内仍含「操作日志」。
+- **实例设置入口收敛（v0.8.3）**：实例设置只保留**启动页侧栏**这一个入口（作用于当前所选实例），打开后顶端导航栏照常显示。
 
 ## 目录结构
 
@@ -35,7 +37,7 @@ PCL-OpenClaw-Launcher/
 │   ├── PclControls/          # 由 PCL 移植的 WPF 控件（VB.NET）
 │   ├── Tests/                # 测试项目
 │   └── NuGet.Config
-├── app-v0.2/ ~ app-v0.8.1/   # 各版本已编译发布（可直接运行）
+├── app-v0.6/ ~ app-v0.8.3/   # 各版本已编译发布（可直接运行）
 ├── installers/<版本>/         # 各版本 Inno Setup 安装包
 ├── installer/                # 安装脚本（模板 ocl.iss.tmpl、生成器 gen-iss.py、各版本 ocl-*.iss）
 ├── plugins/wallpaper-engine/ # OpenClaw 壁纸插件
@@ -67,15 +69,12 @@ PCL-OpenClaw-Launcher/
 
 | 版本 | 路径 |
 | --- | --- |
-| v0.2 | `app-v0.2/` |
-| v0.3 | `app-v0.3/` |
-| v0.4 | `app-v0.4/` |
-| v0.5 | `app-v0.5/` |
 | v0.6 | `app-v0.6.0/` |
 | v0.7 | `app-v0.7.0/` |
 | v0.8 | `app-v0.8.0/` |
 | v0.8.1 | `app-v0.8.1/` |
 | v0.8.2 | `app-v0.8.2/` |
+| v0.8.3 | `app-v0.8.3/` |
 
 每个目录均含可直接运行的 `PCL-OpenClaw-Launcher.exe`（随附 `PclControls.dll` 等依赖）。
 
@@ -87,12 +86,12 @@ PCL-OpenClaw-Launcher/
 
 | 版本 | 安装包 |
 | --- | --- |
-| v0.5 | `OCL-0.5.0-Setup.exe` |
 | v0.6 | `OCL-0.6.0-Setup.exe` |
 | v0.7 | `OCL-0.7.0-Setup.exe` |
 | v0.8 | `OCL-0.8.0-Setup.exe` |
 | v0.8.1 | `OCL-0.8.1-Setup.exe` |
 | v0.8.2 | `OCL-0.8.2-Setup.exe` |
+| v0.8.3 | `OCL-0.8.3-Setup.exe` |
 
 安装包只包含可执行文件、依赖、图标与打赏页资源，**不含**任何个人配置、密钥或源码。脚本见 `installer/ocl.iss.tmpl`（模板）与 `installer/ocl-*.iss`（各版本），生成脚本 `installer/gen-iss.py`。
 
