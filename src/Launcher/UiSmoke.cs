@@ -11,12 +11,27 @@ public sealed partial class MainWindow
   string? openedUrl=null;openDashboardUrl=url=>openedUrl=url;
   cancellation=new();await StartGateway();
   if(openedUrl==null||!Uri.TryCreate(openedUrl,UriKind.Absolute,out _))throw new Exception("Startup did not open dashboard");
-  if(!owned.TryGetValue(current.Id,out var child)||child.HasExited)throw new Exception("Launcher did not start gateway child");
+  // 0.8.7：把这次启动的时间轴与全部日志落盘——「点启动 → 控制台出现」到底花了几秒、
+  // 花在哪一段，必须能在自检产物里看到，而不是靠估。
+  if(launchTimeline.Length>0)
+   File.WriteAllText(report+".timeline.txt",launchTimeline+Environment.NewLine+string.Join(Environment.NewLine,logLines));
+  // 0.8.7：网关本来就跑着时，OCL 会**直接复用**它（不再启第二个，那会撞上单实例锁），
+  // 所以「没有自己拉起的子进程」在这种情况下也是正确行为，不算失败。
+  var startedByUs=owned.TryGetValue(current.Id,out var child)&&child!=null&&!child.HasExited;
+  var reused=RanWarmGateway();
+  if(!startedByUs&&!reused)throw new Exception("Launcher neither started a gateway child nor reused a running gateway");
   for(int n=0;n<8;n++) {await Refresh();if(ReadModel.B(gateway?["rpc"],"ok")==true)break;await Task.Delay(1500);}
   if(ReadModel.B(gateway?["rpc"],"ok")!=true)throw new Exception("Gateway not reachable after startup");
-  Close();await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
-  File.WriteAllText(report,"PASS launcher starts E:\\openclaw; RPC reachable; official dashboard URL handed to browser opener; closing stops only owned gateway child");
+  Close();
+  if(startedByUs)await child!.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+  File.WriteAllText(report,"PASS 网关启动链路："
+   +(startedByUs?"OCL 自己拉起网关子进程":"网关已在运行，OCL 直接复用它")
+   +"；RPC 可达；控制台地址已交给浏览器；关闭只停掉自己拉起的网关子进程。时间轴："+launchTimeline);
  }
+
+ /// <summary>这次启动是不是「复用已经在跑的网关」——判据是启动日志，不是猜。</summary>
+ internal bool RanWarmGateway() =>
+  logLines.Any(line=>line.Contains("已经有一个 OpenClaw 网关")||line.Contains("网关已经在运行"));
  internal async Task RunUiSmoke(string directory) {
   Directory.CreateDirectory(directory);var checks=new List<string>();
   // 上一次失败留下的 ui-error.txt 会让人误判，开跑先清掉。
@@ -28,6 +43,28 @@ public sealed partial class MainWindow
   await WarmListCache(force:true);
   checks.Add("PASS snapshot warm-up: "+warmSummary);
   if(warmSummary.Contains("Skill=无")||warmSummary.Contains("Skill=0")||warmSummary.Contains("快照=未写入"))throw new Exception("快照预热没成功："+warmSummary);
+  // 0.8.7 修复「网页控制台打不开」：网关单实例锁的复核。先只读看一遍，再走一次真实自愈路径。
+  var locks=GatewayLock.Inspect();
+  checks.Add("PASS 网关锁复核（只读）："+(locks.Count==0?"临时目录里没有锁":string.Join("｜",locks.Select(l=>l.Describe()))));
+  ClearStaleGatewayLock();
+  if(lastLockReport.Length==0)throw new Exception("网关锁复核没有给出结论");
+  if(locks.Where(l=>l.IsStale).Count()!=lastLockCleared)throw new Exception("网关锁清理数量与复核结果不一致："+lastLockCleared+" vs "+lastLockReport);
+  checks.Add("PASS 网关锁自愈："+lastLockReport);
+  // 0.8.7 修订：运行环境体检（缺 build-info.json / 残留启动迁移租约）。自检里只做只读判定 +
+  // 在临时目录上的可逆修复，绝不碰用户真实的状态库。
+  if(RuntimeDoctor.Summary(current).Length==0)throw new Exception("运行环境结论是空的");
+  checks.Add("PASS 运行环境结论："+RuntimeDoctor.Summary(current).Replace(Environment.NewLine,"｜"));
+  var buildVerdict=RuntimeDoctor.BuildInfoVerdict(current);
+  if(!buildVerdict.StartsWith("已就绪")&&!buildVerdict.StartsWith("缺少"))throw new Exception("构建标识结论异常："+buildVerdict);
+  checks.Add("PASS 构建标识判定："+buildVerdict);
+  // 后台预热在自检模式必须被挡住，否则自检会真去拉网关，既拖慢也会搅乱正在用的实例。
+  if(owned.Count>0)throw new Exception("自检模式不应该启动任何网关子进程");
+  checks.Add("PASS 后台预热在自检模式下不启动网关");
+  var fakeAlreadyRunning="Gateway failed to start: gateway already running (pid 29096); lock timeout after 5000ms";
+  if(!RuntimeDoctor.MentionsGatewayAlreadyRunning(fakeAlreadyRunning)||RuntimeDoctor.RunningPid(fakeAlreadyRunning)!=29096)throw new Exception("「已有网关在跑」的识别失效");
+  var fakePortInUse="2026-10-04T04:30:15.916+08:00 Port 3000 is already in use.";
+  if(!RuntimeDoctor.MentionsPortInUse(fakePortInUse))throw new Exception("端口占用的识别失效");
+  checks.Add("PASS 启动失败归因：已有网关在跑 / 端口被占用 都能识别（并会改成直接复用那个网关）");
   File.WriteAllText(Path.Combine(directory,"warm-summary.txt"),warmSummary);
   foreach(var name in new[]{"启动总览","版本下载","版本与实例","插件市场","软件连接","实例设置","运行环境","导入实例设置","插件管理","Skills 管理","整合包","操作日志","个性化","背景音乐","关于"}) {CapturePage(name);await Task.Delay(40);Capture(name);checks.Add("PASS page: "+name);}
   // 0.8.6：实例设置是「每个实例一份」的东西，进入后顶端分区导航让位给「实例设置」一项，退出即还原。
@@ -72,8 +109,12 @@ public sealed partial class MainWindow
   checks.Add("PASS 每张连接卡都有「检测连接 / 修复插件 / 打开网页控制台」三个按钮（共 "+connectionButtons.Count+" 组）");
   var sample=connectionButtons[1];
   sample.Console.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Button.ClickEvent));
-  if(!Uri.TryCreate(openedConsoleUrl,UriKind.Absolute,out var consoleUri)||consoleUri.Scheme!="https")throw new Exception("打开网页控制台没有给出有效 https 地址："+openedConsoleUrl);
-  checks.Add("PASS 打开网页控制台 → "+lastConsoleTarget+" · "+openedConsoleUrl);
+  var consoleClick=System.Diagnostics.Stopwatch.StartNew();
+  while(consoleClick.ElapsedMilliseconds<8000&&(consolePlan.Length==0||lastConsoleTarget.Length==0))await Task.Delay(100);
+  if(consolePlan.Length==0||lastConsoleTarget.Length==0){File.WriteAllText(Path.Combine(directory,"app-log.txt"),SafeLog.Clean(string.Join(Environment.NewLine,logLines)));throw new Exception($"「打开网页控制台」按钮点了没反应（busy={busy}，status={status.Text}）");}
+  if(!consolePlan.Contains("控制台"))throw new Exception("「打开网页控制台」没有指向 OpenClaw 控制台："+consolePlan);
+  if(!Uri.TryCreate(openedConsoleUrl,UriKind.Absolute,out var consoleUri)||consoleUri.Scheme!="https")throw new Exception("官方后台地址无效："+openedConsoleUrl);
+  checks.Add("PASS 打开网页控制台 → "+consolePlan+"；该软件官方后台 "+openedConsoleUrl);
   sample.Repair.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Button.ClickEvent));
   await Task.Delay(400);
   if(lastRepairTarget.Length==0)throw new Exception("「修复插件」按钮点了没反应");

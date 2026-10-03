@@ -37,6 +37,11 @@ public sealed partial class MainWindow : Window
  readonly List<(Button Detect,Button Repair,Button Console)> connectionButtons=[];
  internal bool dryRun;
  internal string openedConsoleUrl="",lastConsoleTarget="",lastRepairTarget="",lastProbeTarget="",lastProbeChannel="",lastProbeOutcome="";
+ // 自检用它确认「打开网页控制台」给出的动作计划（是直接开控制台，还是先启动网关）。
+ internal string consolePlan="";
+ // 0.8.7 修复：网关单实例锁的复核结果。pid 被系统回收后锁会卡住，表现为「网页控制台打不开」。
+ internal string lastLockReport="";
+ internal int lastLockCleared;
  // 「软件连接」快照时间：非空表示当前卡片是按快照秒开的，后台正在刷新。
  DateTime? channelSnapshotAt;
  // 0.8.6：进页先按本地快照铺满列表（见 LoadListCache），再后台刷新校正。
@@ -52,6 +57,10 @@ public sealed partial class MainWindow : Window
  List<ItemRow> activeRows=[];
  public MainWindow(bool screenshot=false) {
   this.screenshot=screenshot;
+  // 截图 / 界面自检 / 网关自检都是「无头验证」模式：后台预热绝不能真去拉网关
+  // （会把自检拖成几分钟，也会搅乱用户正在用的实例）。这里在构造时就定下来，
+  // 因为 Loaded 可能在 --ui-smoke 分支设置 dryRun 之前就跑到。
+  dryRun=screenshot;
   Style=(Style)Application.Current.FindResource(typeof(Window));
   store=new Store();var resolvedNode=Runner.ResolveNode(store.Settings.Node);runner=new Runner(resolvedNode);
   // 默认（未显式配置）时把解析到的兼容 node 写回设置，保证界面与运行时一致、下次启动直接命中。
@@ -65,8 +74,10 @@ public sealed partial class MainWindow : Window
    // 实例独立性由底层自检：同一状态目录被多个实例共用会让插件与 Skill 串台，启动时就说明白。
    foreach(var problem in store.EnsureInstanceIsolation())AddLog("实例隔离检查："+problem);
    await Refresh();
-   // 0.8.7：先把插件 / Skill 快照预热好，用户第一次点开这两页就是瞬间全显。
-   _ = WarmListCache();
+   // 0.8.7：先把插件 / Skill 快照预热好，用户第一次点开这两页就是瞬间全显；
+   // 快照预热完再把网关在后台拉起来——这是「点启动 → 控制台出现」进入 10 秒的关键。
+   // 两者都要读写同一个 OpenClaw 状态目录，必须串行，不能抢（抢的结果就是网关起不来）。
+   _ = StartBackgroundWarmup();
    timer.Start();}};
   Closed+=(_,_)=>media.Close();
   timer.Tick+=async(_,_)=>{if(!busy&&refreshCancellation==null&&page is "启动总览" or "软件连接")await Refresh();};
@@ -83,7 +94,7 @@ public sealed partial class MainWindow : Window
   var b=new Button{Content=text};if(primary){b.SetResourceReference(Control.BorderBrushProperty,"AccentBrush");b.SetResourceReference(Control.ForegroundProperty,"AccentBrush");b.FontWeight=FontWeights.SemiBold;}
   b.Click+=(_,_)=>{try{action();}catch(Exception e){Error(e);}};return b;
  }
- Button AsyncButton(string text,Func<Task> action,bool primary=false)=>Button(text,()=>_ = Operate(action),primary);
+ Button AsyncButton(string text,Func<Task> action,bool primary=false)=>Button(text,()=>_ = Operate(action,text),primary);
  static WrapPanel Row(params UIElement[] controls){var row=new WrapPanel();foreach(var c in controls)row.Children.Add(c);return row;}
  // 与输入框并排的短标签：去掉落地下边距并垂直居中，避免和输入框错位。
  static TextBlock Label(string text,double size=13){var t=Text(text,size);t.Margin=new Thickness(0,0,8,0);t.VerticalAlignment=VerticalAlignment.Center;return t;}
@@ -96,9 +107,23 @@ public sealed partial class MainWindow : Window
   if(page=="操作日志"){log.AppendText(text+Environment.NewLine);if(log.Text.Length>200000)log.Text=string.Join(Environment.NewLine,logLines);log.ScrollToEnd();}
  }
  void Error(Exception e) {AddLog(e.Message);status.Text="操作失败，详见日志";MessageBox.Show(this,SafeLog.Clean(e.Message),"操作未完成",MessageBoxButton.OK,MessageBoxImage.Warning);}
- async Task Operate(Func<Task> action) {
-  if(closing)return;if(busy){status.Text="已有操作正在执行，请查看进度或点击取消。";return;}refreshCancellation?.Cancel();busy=true;instancePicker.IsEnabled=false;body.IsEnabled=false;cancellation=new();status.Text="正在处理…";
-  try{await action();status.Text="操作完成 · "+DateTime.Now.ToString("HH:mm:ss");}catch(OperationCanceledException){if(!closing)status.Text="操作已取消";}catch(Exception e){if(!closing)Error(e);}finally{busy=false;instancePicker.IsEnabled=true;body.IsEnabled=true;cancellation.Dispose();cancellation=null;}
+ async Task Operate(Func<Task> action,string? label=null) {
+  // 操作名与耗时都进日志：出问题时能一眼看出「卡住的是哪一步、已经跑了多久」。
+  var name=label??(action.Method.DeclaringType?.Name+"."+action.Method.Name);
+  if(closing)return;
+  // 0.8.7 修订：以前 busy 时直接 return，用户的点击会被「静默吞掉」——
+  // 按钮看起来点了没反应（「打开网页控制台」尤其致命，症状就是「控制台打不开」）。
+  // 现在改成：先掐掉后台刷新，再等上一项操作结束（最多 30 秒）后照常执行。
+  if(busy) {
+   status.Text="上一项操作仍在进行，正在等待它结束后执行…";
+   var wait=System.Diagnostics.Stopwatch.StartNew();
+   while(busy&&!closing&&wait.ElapsedMilliseconds<30000)await Task.Delay(120);
+   if(closing)return;
+   if(busy) {status.Text="上一项操作仍未结束，请稍后再试或点击取消。";return;}
+  }
+  refreshCancellation?.Cancel();busy=true;instancePicker.IsEnabled=false;body.IsEnabled=false;cancellation=new();status.Text="正在处理…";
+  var elapsed=System.Diagnostics.Stopwatch.StartNew();AddLog("开始操作："+name);
+  try{await action();status.Text="操作完成 · "+DateTime.Now.ToString("HH:mm:ss");}catch(OperationCanceledException){if(!closing)status.Text="操作已取消";}catch(Exception e){if(!closing)Error(e);}finally{busy=false;instancePicker.IsEnabled=true;body.IsEnabled=true;cancellation.Dispose();cancellation=null;AddLog("操作结束："+name+"（"+elapsed.Elapsed.TotalSeconds.ToString("0.0")+"s）");}
  }
  bool Confirm(string text)=>MessageBox.Show(this,text,"确认操作",MessageBoxButton.OKCancel,MessageBoxImage.Question)==MessageBoxResult.OK;
  async Task<CommandResult> Run(params string[] args)=>await runner.Run(current,args,120,cancellation?.Token??default);
@@ -197,6 +222,9 @@ public sealed partial class MainWindow : Window
  async Task WarmListCache(bool force=false) {
   var report=new List<string>();
   try {
+   // 绝不在用户正在启动 / 停止网关时抢跑：那会多出四个 CLI 子进程抢同一个状态目录，
+   // 网关起不来就直接表现为「网页控制台打不开」。
+   if(busy||launchStage!=null||owned.Count>0){warmSummary="网关启动中，本次跳过预热";return;}
    var instance=current;var path=ListCachePath(instance.Id);
    if(force||!File.Exists(path)||DateTime.Now-File.GetLastWriteTime(path)>=TimeSpan.FromMinutes(10)) {
     var pluginTask=runner.Run(instance,["plugins","list","--json"],300,CancellationToken.None);
@@ -217,6 +245,7 @@ public sealed partial class MainWindow : Window
      report.Add("列表快照="+(File.Exists(path)?"已写入 "+new FileInfo(path).Length+" 字节":"未写入"));
     }
    } else report.Add("插件/Skill 快照仍新鲜，跳过预热");
+   if(busy||launchStage!=null||owned.Count>0){report.Add("网关启动中，跳过频道预热");warmSummary=string.Join("；",report);return;}
    // 频道清单与状态也一起预热（比插件扫描快，且「软件连接」页完全依赖它）。
    var connectionPath=ConnectionCachePath(instance.Id);
    if(force||!File.Exists(connectionPath)||DateTime.Now-File.GetLastWriteTime(connectionPath)>=TimeSpan.FromMinutes(10)) {
@@ -246,29 +275,123 @@ public sealed partial class MainWindow : Window
   ApplyOverviewVisibility();AnimateContent();
  }
  async Task StartGatewayCore() {
-  LaunchProgress("正在检查已有网关…");
+  // 0.8.7 修订：主人要求「点启动 → 控制台出现」尽量短。以前这条路上串了三次官方 CLI
+  // （探活一次、每轮等就绪一次、最后取地址一次），每次 8 秒起，光开销就 20 秒以上。
+  // 现在只做两件事：探测 TCP 端口是否已应答、就绪就返回；CLI 只在需要诊断时兜底。
+  var boot=Stopwatch.StartNew();
   Runner.EnsureGatewayConfiguration(current);
-  var check=await runner.Run(current,["gateway","status","--json"],20,cancellation?.Token??default);var snapshot=check.Json();
-  if(ReadModel.B(snapshot?["rpc"],"ok")==true){AddLog("网关已经运行，无需重复启动。");gateway=snapshot;SelectPage(page);return;}
-  LaunchProgress("正在启动 OpenClaw，首次启动可能需要一两分钟…");
-  if(owned.TryGetValue(current.Id,out var existing)&&!existing.HasExited){AddLog("等待已启动的网关就绪。");}
-  else if(ReadModel.B(snapshot?["service"],"loaded")==true)await Execute("gateway","start");
-  else {
-   var instance=current;var process=runner.StartGateway(instance,line=>AddLog("["+instance.Name+"] "+line));owned[instance.Id]=process;
-   process.Exited+=(_,_)=>AddLog("["+instance.Name+"] 网关进程已退出，请检查日志。");
-   await Task.Delay(3000,cancellation?.Token??default);if(process.HasExited)throw new Exception("网关启动后退出。请查看操作日志，确认配置、模型和依赖是否完整。");
+  var target=ConsoleEndpoint();
+  LaunchProgress("正在检查已有网关…");
+  // 端口已经在应答 = 网关本来就跑着，省掉一次 8 秒的状态命令。
+  // 这里必须用「带重试的等待探测」而不是单次探测：本机实测进程里第一次连这个地址可能被
+  // 安全软件/沙盒的首次连接检查拖到 2 秒以上，单次探测会误判成「没在跑」，
+  // 于是去启第二个网关、撞上单实例锁——用户看到的就是「启动失败」。
+  if((await ConsoleLauncher.AlreadyRunningAsync(target.Host,target.Port,cancellation?.Token??default)).Ready) {
+   prepareMs=boot.ElapsedMilliseconds;
+   AddLog("网关已经在运行（"+target.Host+":"+target.Port+" 已应答），用时 "+boot.Elapsed.TotalSeconds.ToString("0.0")+" 秒。");
+   _ = RefreshGatewayState();
+   return;
   }
-  var deadline=DateTime.UtcNow.AddSeconds(90);bool ready=false;
-  while(DateTime.UtcNow<deadline) {
-   cancellation?.Token.ThrowIfCancellationRequested();
-   if(owned.TryGetValue(current.Id,out var child)&&child.HasExited)throw new Exception("网关启动失败：\n"+string.Join(Environment.NewLine,logLines.TakeLast(8)));
-   var probe=await runner.Run(current,["gateway","status","--json"],15,cancellation?.Token??default);
-   var value=probe.Json();if(ReadModel.B(value?["rpc"],"ok")==true){gateway=value;ready=true;break;}
-   LaunchProgress("网关正在初始化，正在等待连接检查通过…");
-   await Task.Delay(1000,cancellation?.Token??default);
+  // 网关是单实例锁，pid 被系统回收后会留下永久卡死的锁（gateway run 直接报 already running 退出）。
+  ClearStaleGatewayLock();
+  LaunchProgress("正在启动 OpenClaw…");
+  var process=StartGatewayProcess();
+  // 关键：不再「等 3 秒再问一次 status」，而是每 150 毫秒戳一次 /healthz——
+  // 网关一开始应答就立刻返回去开控制台，一秒都不浪费。
+  // 先给 2.5 秒的快速窗口：如果是锁冲突或「已注册成系统服务」这类秒退，就地补救一次。
+  var quick=await ConsoleLauncher.WaitReadyAsync(target.Host,target.Port,2500,150,cancellation?.Token??default);
+  if(!quick.Ready&&process!=null&&process.HasExited) {
+   // 情况一（最常见）：已经有另一个 OpenClaw 网关在同一个端口上跑着。
+   // 官方这时会拒绝启动并打印「already running (pid N)」「Port N is already in use」，
+   // 但那个网关本身是好的——正确做法是直接复用它，而不是把「启动失败」摔给用户看。
+   var tail=string.Join("\n",logLines.TakeLast(14));
+   if((await ConsoleLauncher.AlreadyRunningAsync(target.Host,target.Port,cancellation?.Token??default)).Ready) {
+    var pid=RuntimeDoctor.RunningPid(tail);
+    AddLog("已经有一个 OpenClaw 网关在 "+target.Host+":"+target.Port+" 上运行"+(pid>0?"（pid "+pid+"）":"")+"，直接使用它，这不是启动失败。");
+    prepareMs=boot.ElapsedMilliseconds;
+    checkedAt=DateTime.Now;SelectPage(page);AddLog("网关已就绪，控制台地址已就绪。");
+    _ = RefreshGatewayState();
+    return;
+   }
+   if(GatewayLock.MentionsLockConflict(tail)) {
+    ClearStaleGatewayLock();
+    if(lastLockCleared>0) {AddLog("检测到网关锁冲突，已清理失效锁，正在重试启动…");process=StartGatewayProcess();}
+   }
+   if(process!=null&&process.HasExited) {
+    // 兜底：有些环境把网关注册成系统服务，此时要用服务方式启动。
+    AddLog("直接启动网关没有起来，改用系统服务方式启动一次。");
+    try{await Execute("gateway","start");}catch(Exception error){AddLog("服务方式启动也未成功："+SafeLog.Clean(error.Message));}
+   }
   }
-  if(!ready)throw new Exception("网关进程尚未通过连接检查。请查看操作日志，或稍后刷新状态。");
-  checkedAt=DateTime.Now;SelectPage(page);AddLog("网关已启动，连接检查通过。");
+  var wait=await ConsoleLauncher.WaitReadyAsync(target.Host,target.Port,110000,150,cancellation?.Token??default);
+  if(!wait.Ready) {
+   var doctor=RuntimeDoctor.HasBuildInfo(current)||!Directory.Exists(Path.Combine(current.Runtime,"dist"))
+    ?""
+    :"\n运行环境：这份 OpenClaw 缺少 dist/build-info.json，每次启动都会重跑一遍启动迁移（实测多花约 50 秒）。到「运行环境」页点「体检并修复」即可补上。";
+   if(process!=null&&process.HasExited) {
+    var hint=GatewayLock.ExplainStartupFailure(string.Join("\n",logLines.TakeLast(14)));
+    throw new Exception("网关启动后退出。请查看操作日志，确认配置、模型和依赖是否完整。"+(hint.Length>0?"\n"+hint:"")+doctor+(lastLockReport.Length>0?"\n网关锁检查："+lastLockReport:""));
+   }
+   var late=GatewayLock.ExplainStartupFailure(string.Join("\n",logLines.TakeLast(14)));
+   throw new Exception("网关的 HTTP 端口在 110 秒内没有应答。"+(late.Length>0?late:"请查看操作日志，或稍后刷新状态。")+doctor);
+  }
+  prepareMs=boot.ElapsedMilliseconds;
+  AddLog("网关 HTTP 端口已应答，用时 "+boot.Elapsed.TotalSeconds.ToString("0.0")+" 秒。");
+  checkedAt=DateTime.Now;SelectPage(page);AddLog("网关已启动，控制台地址已就绪。");
+  _ = RefreshGatewayState();
+ }
+
+ /// <summary>拉起网关子进程（带锁冲突的自动重试）。返回可能已退出的进程，供调用方判断失败原因。</summary>
+ Process? StartGatewayProcess() {
+  if(owned.TryGetValue(current.Id,out var existing)&&!existing.HasExited){AddLog("等待已启动的网关就绪。");return existing;}
+  var instance=current;
+  Process? process=runner.StartGateway(instance,line=>AddLog("["+instance.Name+"] "+line));
+  owned[instance.Id]=process;
+  process.Exited+=(_,_)=>AddLog("["+instance.Name+"] 网关进程已退出，请检查日志。");
+  return process;
+ }
+
+ /// <summary>控制台已打开后再慢慢补一份官方状态给界面（不挡启动路径）。</summary>
+ async Task RefreshGatewayState() {
+  try {
+   var result=await runner.Run(current,["gateway","status","--json"],60,CancellationToken.None);
+   if(result.Json() is JsonNode value&&ReadModel.B(value?["rpc"],"ok")==true&&!closing) {gateway=value;SelectPage(page);}
+  } catch(Exception) {}
+ }
+ void ClearStaleGatewayLock() {
+  try {
+   var (cleared,report)=GatewayLock.ClearStale();
+   lastLockCleared=cleared;lastLockReport=report;
+   AddLog(cleared>0?"已清理失效的网关锁："+report:"网关锁检查："+report);
+  } catch(Exception error){lastLockCleared=0;lastLockReport="检查网关锁失败："+error.Message;AddLog(lastLockReport);}
+ }
+ async Task RepairGatewayLock() {
+  ClearStaleGatewayLock();
+  MessageBox.Show(this,lastLockReport,"网关锁检查",MessageBoxButton.OK,MessageBoxImage.Information);
+  await Refresh();
+ }
+
+ // 0.8.7：运行环境体检——两件「不会自己好」的事：缺 build-info.json（每次启动多花约 50 秒）、
+ // 残留的启动迁移租约（之后每次启动都直接失败）。自检用例读 lastDoctorReport 判断这条链路真的跑通了。
+ internal string lastDoctorReport="";
+ async Task RepairRuntime() {
+  var parts=new List<string>();
+  try {
+   var (buildOk,buildReport)=await RuntimeDoctor.EnsureBuildInfo(current,runner.Node,CancellationToken.None);
+   parts.Add((buildOk?"✔ ":"✘ ")+buildReport);
+  } catch(Exception error){parts.Add("✘ 补齐构建标识失败："+SafeLog.Clean(error.Message));}
+  try {
+   var lease=await RuntimeDoctor.InspectLease(current,runner.Node,CancellationToken.None);
+   parts.Add("· "+lease.Report);
+   if(lease.Present) {
+    var (clearOk,clearReport)=await RuntimeDoctor.ClearLease(current,runner.Node,CancellationToken.None);
+    parts.Add((clearOk?"✔ ":"✘ ")+clearReport);
+   }
+  } catch(Exception error){parts.Add("✘ 处理启动迁移租约失败："+SafeLog.Clean(error.Message));}
+  lastDoctorReport=string.Join(Environment.NewLine,parts);
+  AddLog("运行环境体检："+lastDoctorReport.Replace(Environment.NewLine,"；"));
+  MessageBox.Show(this,lastDoctorReport,"运行环境体检",MessageBoxButton.OK,MessageBoxImage.Information);
+  await Refresh();
  }
  async Task StopGateway() {
   if(owned.TryGetValue(current.Id,out var p)&&!p.HasExited) {
@@ -608,7 +731,8 @@ public sealed partial class MainWindow : Window
   title.Children.Add(new System.Windows.Shapes.Ellipse{Width=9,Height=9,Fill=Brush(app.Indicator),Margin=new Thickness(9,0,0,8),VerticalAlignment=VerticalAlignment.Center,ToolTip=app.State});
   var detect=AsyncButton("检测连接",()=>ProbeConnection(app));
   var repair=AsyncButton("修复插件",()=>RepairAdapter(app));
-  var console=Button("打开网页控制台",()=>OpenConsole(app));
+  var console=AsyncButton("打开网页控制台",()=>OpenConsole(app));
+  console.ToolTip="打开 OpenClaw 控制台（网关未运行会先启动）；"+app.Name+" 官方后台："+app.ConsoleUrl;
   connectionButtons.Add((detect,repair,console));
   return Card("",title,Text(app.Summary,13,app.Indicator),Text(app.Detail.Length>0?app.Detail:"状态来自 OpenClaw 官方设置；账号与凭据都在 OpenClaw 里，启动器不保存任何密钥。",11),Row(detect,repair,console));
  }
@@ -619,7 +743,7 @@ public sealed partial class MainWindow : Window
   if(target==null) {await Json("channels","status","--channel",app.Id,"--probe","--timeout","20000","--json");lastProbeOutcome="官方探测完成："+app.Id;return;}
   // 网关没起来时，官方探测会先重试连接约 40 秒才报「网关不可达」；先确认一次网关，给用户一句明白话，别让他干等。
   if(ReadModel.B(gateway?["rpc"],"ok")!=true) {
-   var check=await runner.Run(current,["gateway","status","--json"],20,cancellation?.Token??default);
+   var check=await runner.Run(current,["gateway","status","--json"],60,cancellation?.Token??default);
    if(check.Json() is JsonNode fresh)gateway=fresh;
   }
   if(ReadModel.B(gateway?["rpc"],"ok")!=true) {
@@ -648,11 +772,22 @@ public sealed partial class MainWindow : Window
    plugins=[];skills=[];await Refresh();
   });
  }
- // 打开网页控制台：该软件的官方后台 / 网页端；没收录的一律给 OpenClaw 频道文档，保证按钮不空转。
- void OpenConsole(ConnectionApp app) {
-  var url=app.ConsoleUrl;
-  if(dryRun){AddLog("（自检）打开网页控制台将打开："+url);openedConsoleUrl=url;lastConsoleTarget=app.Id;return;}
-  OpenLink(url);AddLog("已打开 "+app.Name+" 的网页控制台："+url);
+ // 打开网页控制台 = 打开 OpenClaw 本地控制台（与 Wallpaper Engine 那张卡一致）。
+ // 网关没起来时**先启动网关再打开**：旧写法直接调 dashboard，网关没跑就要等满 60 秒才报
+ // 「Gateway is not running」——用户看到的就是「网页控制台打不开」。
+ // 该软件自己的官方后台地址放在按钮提示与日志里，不抢这个按钮的位置。
+ async Task OpenConsole(ConnectionApp app)=>await OpenConsoleFor(app.Name,app.ConsoleUrl,app.Id);
+ async Task OpenConsoleFor(string label,string officialUrl,string target) {
+  consolePlan=(ReadModel.B(gateway?["rpc"],"ok")==true?"打开 OpenClaw 控制台":"先启动网关，再打开 OpenClaw 控制台")+"（"+label+"）";
+  lastConsoleTarget=target;openedConsoleUrl=officialUrl;
+  if(dryRun){AddLog("（自检）打开网页控制台："+consolePlan+(officialUrl.Length>0?"；官方后台 "+officialUrl:""));return;}
+  await Operate(async()=>{
+   if(ReadModel.B(gateway?["rpc"],"ok")!=true) {
+    AddLog("网关未运行：先启动网关，随后自动打开控制台。");
+    await StartGateway();   // 内含启动进度窗口，结束时自己会调用 OpenDashboard
+   } else await OpenDashboard();
+   AddLog(label+"：控制台已打开"+(officialUrl.Length>0?"；该软件的官方后台是 "+officialUrl:"")+"。");
+  });
  }
  async Task ProbeChannel(ItemRow row) {
   var selected=current;
@@ -670,7 +805,8 @@ public sealed partial class MainWindow : Window
  UIElement WallpaperConnectionCard() {
   var title=new StackPanel{Orientation=Orientation.Horizontal};title.Children.Add(Text("Wallpaper Engine",16,"#444444"));
   var label=Text("点击检测本地壁纸库与网页组件",12);var light=new System.Windows.Shapes.Ellipse{Width=9,Height=9,Fill=Brush("#999999"),Margin=new Thickness(9,0,0,8),VerticalAlignment=VerticalAlignment.Center};title.Children.Add(light);
-  var console=AsyncButton("打开网页控制台",OpenDashboard);
+  var console=AsyncButton("打开网页控制台",()=>OpenConsoleFor("Wallpaper Engine","https://www.wallpaperengine.io/","wallpaper-engine"));
+  console.ToolTip="打开 OpenClaw 控制台（网关未运行会先启动）；Wallpaper Engine 官网：https://www.wallpaperengine.io/";
   var detect=Button("检测连接",()=>{
    try{var configPath=current.Config.Length>0?current.Config:Path.Combine(current.State.Length>0?current.State:Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),".openclaw"),"openclaw.json");
     var cfg=JsonNode.Parse(File.ReadAllText(configPath));var plugin=cfg?["plugins"]?["entries"]?["wallpaper-engine"];

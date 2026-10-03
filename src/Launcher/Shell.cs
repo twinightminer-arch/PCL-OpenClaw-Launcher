@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
@@ -128,6 +129,10 @@ public sealed partial class MainWindow
   var online=ReadModel.B(gateway?["rpc"],"ok")==true;
   body.Children.Add(Card(store.Settings.Appearance.WelcomeText,Text("这里是你的 OpenClaw 启动器。选择实例，管理扩展，然后开始工作。",13),Row(Button("下载 OpenClaw",()=>Navigate("版本下载"),true),Button("软件连接",()=>Navigate("软件连接")),Button("个性化你的启动器",()=>Navigate("个性化")))));
   body.Children.Add(Card("实例状态",GatewaySummary(),Text("安装目录："+current.Runtime,11,"#888888"),Text(SafeLog.Clean(ReadModel.S(gateway?["rpc"],"error",online?"网关 RPC 检查通过。":"点击刷新检查当前实例，或先完成运行配置。")),12),Row(Button("刷新",()=>{if(!busy)_ = Refresh();}),AsyncButton("停止",StopGateway),AsyncButton("重启",async()=>{await StopGateway();await StartGateway();}),AsyncButton("控制台",OpenDashboard))));
+  // 0.8.7：网关单实例锁的复核入口——pid 被系统回收后旧锁会永久卡住，症状就是「网页控制台打不开」。
+  body.Children.Add(Card("网关锁",Text("OpenClaw 是单实例：启动锁记在系统临时目录，pid 被系统回收后旧锁会永久卡住，症状就是控制台怎么都打不开。启动前 OCL 会自动复核一次，这里也可以手动来一遍。",11,"#888888"),Text(GatewayLock.Summary(),12),Row(AsyncButton("检查并清理失效锁",RepairGatewayLock),Button("打开锁目录",()=>{try{Directory.CreateDirectory(GatewayLock.LockDirectory);Process.Start(new ProcessStartInfo(GatewayLock.LockDirectory){UseShellExecute=true});}catch(Exception e){Error(e);}}))));
+  // 0.8.7：运行环境体检。这两项不会自己好，而且都直接表现为「启动慢 / 起不来」。
+  body.Children.Add(Card("运行环境",Text("官方发布产物里必须带 dist/build-info.json，OpenClaw 靠它判断启动迁移是否已经跑过；缺了就会每次启动重跑一遍（实测多花约 50 秒）。启动迁移租约被强杀的上一次启动占住时，之后每次启动都会直接失败——两件事这里都能一键修。",11,"#888888"),Text(RuntimeDoctor.Summary(current),12),Row(AsyncButton("体检并修复",RepairRuntime),Button("打开状态目录",()=>{try{var dir=RuntimeDoctor.StateDirectory(current);Directory.CreateDirectory(dir);Process.Start(new ProcessStartInfo(dir){UseShellExecute=true});}catch(Exception e){Error(e);}}))));
   body.Children.Add(Card("启动器",Text("OCL "+Brand.Version+"  ·  PCL 风格 OpenClaw 独立启动器",12),Text("PCL 原作者：龙腾猫跃。本程序为第三方独立二次创作。",11,"#999999")));
  }
  UIElement InstanceList() {

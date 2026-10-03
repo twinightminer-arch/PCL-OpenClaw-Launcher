@@ -315,9 +315,14 @@ public sealed class Runner
   return psi;
  }
  public async Task<CommandResult> Run(Instance instance,string[] args,int seconds=90,CancellationToken cancellation=default) {
+  // 0.8.7：带上真实耗时。官方 CLI 在慢盘或安全软件拦截下会明显变慢，
+  // 排障时「哪条命令花了多久、超时上限是多少」比一句「状态检查超时」有用得多。
+  var watch=Stopwatch.StartNew();
   Log?.Invoke("› "+string.Join(" ",args.Take(2)));
   var result=await Execute(StartInfo(instance,args),seconds,cancellation);
-  if(!result.Ok)Log?.Invoke("失败："+result.Summary);
+  watch.Stop();
+  if(!result.Ok)Log?.Invoke($"失败（{watch.Elapsed.TotalSeconds:0.0}s / 上限 {seconds}s）："+result.Summary);
+  else if(watch.Elapsed.TotalSeconds>=seconds/2.0)Log?.Invoke($"（{string.Join(" ",args.Take(2))} 用时 {watch.Elapsed.TotalSeconds:0.0}s，接近 {seconds}s 上限）");
   return result;
  }
  public static async Task<CommandResult> Execute(ProcessStartInfo info,int seconds,CancellationToken cancellation=default) {
@@ -334,6 +339,12 @@ public sealed class Runner
    return new(-1,"","状态检查超时，请查看网关日志后重试。",true);
   }
   return new(p.ExitCode,await stdout,await stderr);
+ }
+ // 实例实际生效的配置文件路径（与下面的 EnsureGatewayConfiguration 用同一套推导）。
+ // 控制台地址要在本地直接算出来，必须先找到这份配置。
+ public static string ConfigPath(Instance instance) {
+  var state=instance.State.Length>0?instance.State:Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),".openclaw");
+  return instance.Config.Length>0?instance.Config:Path.Combine(state,"openclaw.json");
  }
  public static void EnsureGatewayConfiguration(Instance instance) {
   var state=instance.State.Length>0?instance.State:Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),".openclaw");

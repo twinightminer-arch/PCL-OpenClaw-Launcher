@@ -83,9 +83,55 @@ Check(ConnectionCatalog.Display("qqbot")=="QQ Bot"&&ConnectionCatalog.Display("o
 var market=JsonNode.Parse("""{"results":[{"package":{"name":"obsidian-media-claim","displayName":"Obsidian Media Claim","isOfficial":false}},{"package":{"name":"line-adapter","displayName":"某人的 LINE","isOfficial":false}},{"package":{"name":"openclaw-line","displayName":"LINE (official)","isOfficial":true}}]}""");
 Check(ConnectionCatalog.BestAdapter("line",market)?.Id=="openclaw-line","adapter search prefers the exact then official package");
 Check(ConnectionCatalog.BestAdapter("line",JsonNode.Parse("""{"results":[]}"""))==null,"no adapter results means no match instead of installing something random");
+// 0.8.7 修复「网页控制台打不开」：网关单实例锁的复核逻辑（pid 被系统回收后旧锁会永久卡住）。
+Check(GatewayLock.VerdictFor(false,"node").StartsWith("失效")&&GatewayLock.VerdictFor(false,"node").Contains("不存在"),"a lock whose pid is gone is stale");
+Check(GatewayLock.VerdictFor(true,"SearchFilterHost").StartsWith("失效")&&GatewayLock.VerdictFor(true,"SearchFilterHost").Contains("复用"),"a recycled pid owned by an unrelated process is stale");
+Check(GatewayLock.VerdictFor(true,"node").StartsWith("存活")&&GatewayLock.VerdictFor(true,"openclaw").StartsWith("存活"),"a lock held by a real node/openclaw process is left alone");
+Check(GatewayLock.VerdictFor(true,"").StartsWith("未知"),"unreadable process info is never treated as stale");
+Check(GatewayLock.IsGatewayLike("NODE")&&GatewayLock.IsGatewayLike("openclaw-gateway")&&!GatewayLock.IsGatewayLike("explorer")&&!GatewayLock.IsGatewayLike(""),"gateway process names matched case-insensitively, others rejected");
+Check(GatewayLock.PidAlive(0)==false&&GatewayLock.PidAlive(-1)==false,"invalid pids are never called alive");
+var lockPath=Path.Combine(root,"gateway.deadbeef.lock");
+var parsed=GatewayLock.Parse(lockPath,"""{"pid":26852,"ownerId":"37ba12bd","createdAt":"2026-10-03T15:03:41.525Z","configPath":"C:/c.json","stateDir":"C:/s","port":3000}""");
+Check(parsed!=null&&parsed!.Pid==26852&&parsed.Port==3000&&parsed.CreatedAt.StartsWith("2026-10-03")&&parsed.Describe().Contains("3000"),"a real-world stale lock payload parses into a readable diagnosis");
+Check(GatewayLock.Parse(lockPath,"not json")==null&&GatewayLock.Parse(lockPath,"""{"pid":0}""")==null,"malformed or pid-less lock payloads are ignored");
+Check(GatewayLock.MentionsLockConflict("Gateway failed to start: gateway already running (pid 26852); lock timeout after 5000ms")&&!GatewayLock.MentionsLockConflict("gateway listening on port 3000"),"the lock-conflict message is recognised");
+Check(GatewayLock.Inspect().All(item=>item.Pid>0&&item.Name.EndsWith(".lock")),"every inspected lock comes from a parseable gateway lock file");
+var migrationTail="[openclaw] Reason: OpenClaw startup migrations are already running for this state directory; retry after the other gateway finishes or after 2026-10-03T19:03:04.335Z.";
+Check(GatewayLock.ExplainStartupFailure(migrationTail).Contains("启动迁移")&&GatewayLock.ExplainStartupFailure(migrationTail).Contains("03:03:04"),"a startup-migration conflict is explained with the local retry time");
+Check(GatewayLock.ExplainStartupFailure("Gateway failed to start: gateway already running (pid 26852); lock timeout after 5000ms").Contains("清理失效锁"),"a lock conflict points the user at the lock repair button");
+Check(GatewayLock.ExplainStartupFailure("Error: listen EADDRINUSE: address already in use 127.0.0.1:3000").Contains("端口"),"a port conflict names the port");
+Check(GatewayLock.ExplainStartupFailure("[openclaw] Could not start the CLI.").Contains("运行环境"),"a broken CLI install points at the runtime page");
+Check(GatewayLock.ExplainStartupFailure("").Length==0&&GatewayLock.ExplainStartupFailure("nothing familiar here").Length==0,"unknown failures get no invented advice");
 Check(new Release("2026.9.6-beta.1","","","beta").Preview&&!new Release("2026.9.6","","","latest").Preview,"catalog channel classification");
 store.Settings.Appearance.BackgroundImage="C:/test/image.png";store.Settings.Appearance.MusicVolume=.22;store.Settings.Appearance.Playlist.Add("C:/test/music.mp3");store.Save();var reloaded=new Store(root);Check(reloaded.Settings.Appearance.MusicVolume==.22&&reloaded.Settings.Appearance.Playlist.Count==1,"personalization survives settings reload");
 var broken=Path.Combine(root,"broken");Directory.CreateDirectory(broken);File.WriteAllText(Path.Combine(broken,"package.json"),"{\"name\":\"openclaw\",\"version\":\"2026.9.6\"}");File.WriteAllText(Path.Combine(broken,"openclaw.mjs"),"process.exit(1)");Check(!await RuntimeInstall.IsReady(node,broken,"2026.9.6"),"incomplete npm install cannot appear installed");
+// 0.8.7 修订：运行环境体检（缺 build-info.json 会让每次启动重跑约 50 秒的启动迁移；
+// 残留的启动迁移租约会让网关每次都起不来）。
+var doctorRuntime=Path.Combine(root,"doctor-runtime");Directory.CreateDirectory(Path.Combine(doctorRuntime,"dist"));
+File.WriteAllText(Path.Combine(doctorRuntime,"package.json"),"{\"name\":\"openclaw\",\"version\":\"2026.7.2\"}");
+var doctorInstance=new Instance{Id="doctor",Name="体检用例",Runtime=doctorRuntime,State="",Config="",Port=3000};
+// 租约那两条断言要一份「从没被启动过」的实例：状态目录是空的，没有状态库。
+var leaseInstance=new Instance{Id="lease",Name="租约用例",Runtime=doctorRuntime,State=Path.Combine(root,"doctor-state"),Config=Path.Combine(root,"doctor-state","openclaw.json"),Port=3001};
+Check(RuntimeDoctor.BuildInfoPath(doctorInstance)==Path.Combine(doctorRuntime,"dist","build-info.json"),"build info is read from dist/build-info.json");
+Check(!RuntimeDoctor.HasBuildInfo(doctorInstance)&&RuntimeDoctor.BuildInfoVerdict(doctorInstance).Contains("50 秒"),"a missing build-info.json is reported with the real cost");
+var buildFix=await RuntimeDoctor.EnsureBuildInfo(doctorInstance,node,default);
+Check(buildFix.Ok&&RuntimeDoctor.HasBuildInfo(doctorInstance),"a missing build-info.json can be repaired in place");
+Check(RuntimeDoctor.BuiltAt(doctorInstance).EndsWith("Z")&&RuntimeDoctor.BuiltAt(doctorInstance).Length>=20,"the repaired build info carries a usable builtAt stamp");
+Check(File.ReadAllText(RuntimeDoctor.BuildInfoPath(doctorInstance)).Contains("\"version\": \"2026.7.2\""),"the repaired build info keeps the official field shape");
+var again=await RuntimeDoctor.EnsureBuildInfo(doctorInstance,node,default);
+Check(again.Ok&&again.Report.Contains("无需补齐"),"an existing build info is left untouched");
+Check(RuntimeDoctor.StateDirectory(new Instance{State=""}).EndsWith(Path.Combine("",".openclaw").TrimStart(Path.DirectorySeparatorChar))||RuntimeDoctor.StateDirectory(new Instance{State=""}).EndsWith(".openclaw"),"an instance without its own state falls back to ~/.openclaw");
+Check(RuntimeDoctor.StateDirectory(new Instance{State=@"E:\state\one"})==@"E:\state\one","an instance with its own state keeps it");
+Check(RuntimeDoctor.StateDatabasePath(new Instance{State=@"E:\state\one"}).EndsWith(Path.Combine("state","openclaw.sqlite")),"the startup-migration lease lives in <state>/state/openclaw.sqlite");
+Check(RuntimeDoctor.MentionsGatewayAlreadyRunning("Gateway failed to start: gateway already running (pid 29096); lock timeout after 5000ms"),"the official already-running line is recognised");
+Check(RuntimeDoctor.RunningPid("Gateway failed to start: gateway already running (pid 29096); lock timeout after 5000ms")==29096,"the pid of the already-running gateway is extracted");
+Check(RuntimeDoctor.RunningPid("Port 3000 is already in use.")==0&&!RuntimeDoctor.MentionsGatewayAlreadyRunning("Port 3000 is already in use."),"a bare port conflict is not mistaken for a running gateway");
+Check(RuntimeDoctor.MentionsPortInUse("Port 3000 is already in use.")&&RuntimeDoctor.MentionsPortInUse("Error: listen EADDRINUSE: address already in use 127.0.0.1:3000"),"port-in-use output is recognised from both official wordings");
+var leaseVerdict=await RuntimeDoctor.InspectLease(leaseInstance,node,default);
+Check(leaseVerdict.Known==false&&leaseVerdict.Report.Contains("没有状态库"),"a never-started instance reports no lease instead of guessing");
+var clearedLease=await RuntimeDoctor.ClearLease(leaseInstance,node,default);
+Check(clearedLease.Ok&&clearedLease.Report.Contains("无需清理"),"clearing a lease on a never-started instance is a no-op, not an error");
+Check(GatewayLock.ExplainStartupFailure(migrationTail).Contains("运行环境"),"a stale startup-migration lease points the user at the runtime repair button");
 if(args.Contains("--catalog")) {
  var fetched=await ReleaseCatalog.Fetch(new Runner(node),Path.Combine(root,"catalog.json"),default);Check(fetched.Releases.Count>0&&fetched.Releases.Any(v=>v.Version==fetched.Latest),"live official release catalog and latest tag");Check(ReleaseCatalog.ReadCache(Path.Combine(root,"catalog.json"))?.Releases.Count==fetched.Releases.Count,"offline catalog cache roundtrip");Console.WriteLine($"Catalog: {fetched.Releases.Count} versions; latest {fetched.Latest}");
 }
