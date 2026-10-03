@@ -1,0 +1,60 @@
+﻿; PCL OpenClaw Launcher — per-version installer template.
+; Generated placeholders: 0.8.7 E:\openclaw\ocl\app-v0.8.7 E:\openclaw\ocl\installers\0.8.7
+;
+; 升级约定（0.8.0 起固定，后续版本不要再改这几项）：
+;   · AppId 固定不变 → 新版本覆盖安装旧版本，而不是并存。
+;   · DefaultDirName 固定不带版本号且固定在 E:\OCL → 安装目录稳定，升级原地替换。
+;     （0.8.5 起按主人要求由 %LOCALAPPDATA%\Programs\OCL 改到 E 盘，别再往 C 盘塞。）
+;   · UsePreviousAppDir=no → 否则 Inno 会沿用注册表里「上次安装目录」的残留记录，
+;     把新版本装回旧位置（实测曾把 0.8.0 装进开发目录 E:\openclaw\ocl）。
+;   · 桌面/开始菜单快捷方式名固定 → 升级后自动指向最新版本，不会残留 OCL 0.7.0 之类的旧链接。
+;   · CloseApplications=yes → 升级时自动关闭正在运行的 OCL，否则 exe 被占用无法替换。
+;   · 用户数据不在安装目录内（%LOCALAPPDATA%\OCL），卸载或升级都不会丢设置与背景媒体。
+[Setup]
+AppId={{8E1C3A72-0F5B-4D31-9C10-0A1F2B3C4D70}
+AppName=PCL OpenClaw Launcher
+AppVersion=0.8.7
+AppVerName=PCL OpenClaw Launcher 0.8.7
+AppPublisher=Twinight_Miner
+AppPublisherURL=https://github.com/twinightminer-arch/PCL-OpenClaw-Launcher
+AppSupportURL=https://github.com/twinightminer-arch/PCL-OpenClaw-Launcher
+DefaultDirName=E:\OCL
+; 必须显式关掉：默认 yes 会沿用「上次安装目录」的注册表记录，把新版本装回旧位置
+; （本机实测：残留记录指向 E:\openclaw\ocl，导致 0.8.0 装进开发目录而不是 Programs\OCL）。
+; 关掉后默认目录恒为 DefaultDirName，用户仍可在向导里手动改。
+UsePreviousAppDir=no
+DefaultGroupName=OCL
+DisableProgramGroupPage=yes
+AllowNoIcons=yes
+OutputDir=E:\openclaw\ocl\installers\0.8.7
+OutputBaseFilename=OCL-0.8.7-Setup
+Compression=lzma2
+SolidCompression=yes
+WizardStyle=modern
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
+PrivilegesRequired=lowest
+SetupIconFile=E:\openclaw\ocl\app-v0.8.7\Assets\ocl.ico
+UninstallDisplayIcon={app}\PCL-OpenClaw-Launcher.exe
+UninstallDisplayName=PCL OpenClaw Launcher 0.8.7
+DisableWelcomePage=no
+CloseApplications=yes
+CloseApplicationsFilter=PCL-OpenClaw-Launcher.exe
+
+[Tasks]
+Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加任务："
+
+[Files]
+Source: "E:\openclaw\ocl\app-v0.8.7\PCL-OpenClaw-Launcher.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "E:\openclaw\ocl\app-v0.8.7\PCL-OpenClaw-Launcher.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "E:\openclaw\ocl\app-v0.8.7\PCL-OpenClaw-Launcher.deps.json"; DestDir: "{app}"; Flags: ignoreversion
+Source: "E:\openclaw\ocl\app-v0.8.7\PCL-OpenClaw-Launcher.runtimeconfig.json"; DestDir: "{app}"; Flags: ignoreversion
+Source: "E:\openclaw\ocl\app-v0.8.7\PclControls.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "E:\openclaw\ocl\app-v0.8.7\Assets\*"; DestDir: "{app}\Assets"; Flags: ignoreversion recursesubdirs
+
+[Icons]
+Name: "{userprograms}\PCL OpenClaw Launcher"; Filename: "{app}\PCL-OpenClaw-Launcher.exe"; WorkingDir: "{app}"
+Name: "{userdesktop}\OCL"; Filename: "{app}\PCL-OpenClaw-Launcher.exe"; WorkingDir: "{app}"; Tasks: desktopicon
+
+[Run]
+Filename: "{app}\PCL-OpenClaw-Launcher.exe"; Description: "启动 OCL"; Flags: nowait postinstall skipifsilent

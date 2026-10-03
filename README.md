@@ -42,6 +42,9 @@
 - **实例独立性改为底层自动（v0.8.6）**：去掉手动检查按钮，启动与保存运行设置时自动核对各实例状态目录，两个实例共用同一目录会直接写进操作日志。
 - **整合包只做导出（v0.8.6）**：取消导入整合包；新增「预览可导出的整合包」——先列出全部插件与 Skill（默认勾选已启用项）再导出，能确定来源的记安装引用，不能还原的列入「待补充项」。
 - **运行环境 / 导入实例设置独立成页（v0.8.6）**：「运行环境与配置」与「从其他实例导入设置」从实例设置页拆出来，各自成为左侧导航项。
+- **三个列表都「点开就有」（v0.8.7）**：插件列表、Skill 列表、软件连接列表全部读本地快照并在启动时后台预热，进页面瞬间铺满再后台校正，不再需要等扫描或点检测（实测 插件 154 · Skill 117 · 软件 31，0 等待）；同时修掉 0.8.6「插件页与 Skill 页互相覆盖快照」的遗留问题。
+- **软件连接页重做（v0.8.7）**：取消「API 密钥链接（Token）」整块，所有软件都按插件接入；软件清单直接读 OpenClaw 官方设置（`channels list --all` × 插件 `channelIds`），微信 / QQ Bot / Telegram / LINE / Signal / 邮箱等**一个软件一张卡**，与 Wallpaper Engine 同构。
+- **连接卡三个按钮都能用（v0.8.7）**：检测连接（官方 `channels status --probe`，网关未运行会秒回原因并跳过）、修复插件（未启用就 `plugins enable`，没装就从 ClawHub 找适配器安装）、打开网页控制台（打开该软件官方后台，未收录的给 OpenClaw 频道文档）。
 
 ## 目录结构
 
@@ -52,7 +55,7 @@ PCL-OpenClaw-Launcher/
 │   ├── PclControls/          # 由 PCL 移植的 WPF 控件（VB.NET）
 │   ├── Tests/                # 测试项目
 │   └── NuGet.Config
-├── app-v0.2/ ~ app-v0.8.6/   # 各版本已编译发布（可直接运行）
+├── app-v0.2/ ~ app-v0.8.7/   # 各版本已编译发布（可直接运行）
 ├── installers/<版本>/         # 各版本 Inno Setup 安装包
 ├── installer/                # 安装脚本（模板 ocl.iss.tmpl、生成器 gen-iss.py、各版本 ocl-*.iss）
 ├── plugins/wallpaper-engine/ # OpenClaw 壁纸插件
@@ -97,6 +100,7 @@ PCL-OpenClaw-Launcher/
 | v0.8.4 | `app-v0.8.4/` |
 | v0.8.5 | `app-v0.8.5/` |
 | v0.8.6 | `app-v0.8.6/` |
+| v0.8.7 | `app-v0.8.7/` |
 
 每个目录均含可直接运行的 `PCL-OpenClaw-Launcher.exe`（随附 `PclControls.dll` 等依赖）。
 
@@ -118,6 +122,7 @@ PCL-OpenClaw-Launcher/
 | v0.8.4 | `OCL-0.8.4-Setup.exe` |
 | v0.8.5 | `OCL-0.8.5-Setup.exe` |
 | v0.8.6 | `OCL-0.8.6-Setup.exe` |
+| v0.8.7 | `OCL-0.8.7-Setup.exe` |
 
 安装包只包含可执行文件、依赖、图标与打赏页资源，**不含**任何个人配置、密钥或源码。脚本见 `installer/ocl.iss.tmpl`（模板）与 `installer/ocl-*.iss`（各版本），生成脚本 `installer/gen-iss.py`。
 

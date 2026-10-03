@@ -384,8 +384,10 @@ public sealed class Runner
   } catch { return false; }
  }
 }
-public sealed record ItemRow(string Id,string Name,string State,string Detail,string Source="",string Account="",bool Enabled=false,string RootDir="") {
+public sealed record ItemRow(string Id,string Name,string State,string Detail,string Source="",string Account="",bool Enabled=false,string RootDir="",IReadOnlyList<string>? ChannelIds=null) {
  public string Indicator => State switch { "已连接" or "探测通过" or "已加载" or "壁纸库可用" => "#248B69", "连接异常" or "未连接" or "检测失败" or "加载失败" => "#D9363E", _ when State.Contains("未验证") => "#C58B20", _ => "#999999" };
+ // 插件声明它提供哪些频道适配器（plugins list 的 channelIds）——「软件连接」页据此把软件和适配器插件对上。
+ public bool ProvidesChannel(string id)=>ChannelIds?.Any(c=>string.Equals(c,id,StringComparison.OrdinalIgnoreCase))==true;
 }
 // 插件市场条目（下载页，跨实例共用；只有「添加到实例」这一动作）。
 public sealed record MarketItem(string Id,string Display,string Owner,string Summary,string Version,string Downloads,bool Official);
@@ -397,7 +399,9 @@ public static class ReadModel
  public static List<ItemRow> Plugins(JsonNode? json) {
   if(json?["plugins"] is not JsonArray list)throw new Exception("插件列表返回了不支持的数据格式。");
   // rootDir = OpenClaw 报告的插件真实目录（全局插件会指向 ~/.openclaw/extensions），删除时按它精准定位。
-  return list.Where(n=>n!=null).Select(n=>new ItemRow(S(n,"id"),S(n,"name",S(n,"id")),S(n,"status") switch {"loaded"=>"已加载","disabled"=>"已禁用","error"=>"加载失败",var v=>v.Length>0?v:"未确认"},SafeLog.Clean(S(n,"error",S(n,"description"))),S(n,"origin"),Enabled:B(n,"enabled")==true,RootDir:S(n,"rootDir"))).ToList();
+  // channelIds = 该插件提供的频道适配器（如 telegram / line / qqbot），「软件连接」页用它把软件对上插件。
+  return list.Where(n=>n!=null).Select(n=>new ItemRow(S(n,"id"),S(n,"name",S(n,"id")),S(n,"status") switch {"loaded"=>"已加载","disabled"=>"已禁用","error"=>"加载失败",var v=>v.Length>0?v:"未确认"},SafeLog.Clean(S(n,"error",S(n,"description"))),S(n,"origin"),Enabled:B(n,"enabled")==true,RootDir:S(n,"rootDir"),
+   ChannelIds:(n?["channelIds"] as JsonArray)?.Where(x=>x!=null).Select(x=>x!.ToString()).ToList()??[])).ToList();
  }
  public static List<ItemRow> Skills(JsonNode? json) {
   if(json?["skills"] is not JsonArray list)throw new Exception("Skills 返回了不支持的数据格式。");

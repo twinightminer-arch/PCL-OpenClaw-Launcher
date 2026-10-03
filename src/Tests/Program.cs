@@ -60,6 +60,29 @@ Check(!ReleaseCatalog.ValidVersion("../../x")&&!ReleaseCatalog.ValidVersion("lat
 Check(!ReleaseCatalog.ValidVersion("2026.9.6...")&&!ReleaseCatalog.ValidVersion("2026.9.6-"),"reject Windows trailing-dot version aliases");
 var hashFile=Path.Combine(root,"hash.txt");File.WriteAllText(hashFile,"verified");using(var stream=File.OpenRead(hashFile)){var hash="sha512-"+Convert.ToBase64String(System.Security.Cryptography.SHA512.HashData(stream));Check(ArchiveDownload.Verify(hashFile,hash)&&!ArchiveDownload.Verify(hashFile,"sha512-incorrect"),"archive integrity rejects modified payload");}
 Check(!ArchiveDownload.Trusted(new Release("2026.9.6","","","",Tarball:"https://evil.invalid/openclaw.tgz",Integrity:"sha512-xxx")),"archive source constrained to official registry");
+// 0.8.7「软件连接」：软件清单来自官方频道清单 × 插件适配器（channelIds），三个按钮的逻辑要可验证。
+var connChannels=new List<ItemRow> {
+ new("openclaw-weixin","微信","已配置 · 连接未验证","",Account:"default"),
+ new("telegram","Telegram","已连接","",Account:"default"),
+ new("line","LINE","未安装适配器",""),
+ new("signal","Signal","未连接","",Account:"main") };
+var connPlugins=new List<ItemRow> {
+ new("telegram","@openclaw/telegram","已加载","",Enabled:true,ChannelIds:new[]{"telegram"}),
+ new("line","LINE","已禁用","",Enabled:false,ChannelIds:new[]{"line"}),
+ new("openclaw-weixin","@tencent-weixin/openclaw-weixin","已加载","",Enabled:true,ChannelIds:new[]{"openclaw-weixin"}) };
+var apps=ConnectionCatalog.Apps(connPlugins,connChannels);
+Check(apps.Count==connChannels.Count,"every official channel becomes one connection card");
+Check(apps.First(a=>a.Id=="telegram").AdapterReady&&apps.First(a=>a.Id=="telegram").Indicator=="#248B69","connected app shows green with a ready adapter");
+Check(apps.First(a=>a.Id=="line").PluginId=="line"&&!apps.First(a=>a.Id=="line").AdapterReady,"disabled bundled adapter is matched and flagged as not ready");
+Check(apps.First(a=>a.Id=="signal").PluginId.Length==0&&!apps.First(a=>a.Id=="signal").AdapterInstalled,"channel without adapter is flagged as missing");
+Check(apps[0].Id=="telegram","usable apps sort before unconfigured ones");
+Check(apps.All(a=>a.ConsoleUrl.StartsWith("https://")),"every card has an https console target");
+Check(ConnectionCatalog.ConsoleUrl("telegram")=="https://web.telegram.org/"&&ConnectionCatalog.ConsoleUrl("line").Contains("line.biz")&&ConnectionCatalog.ConsoleUrl("qqbot").Contains("q.qq.com")&&ConnectionCatalog.ConsoleUrl("openclaw-weixin").Contains("mp.weixin.qq.com"),"console targets map to each software's official console");
+Check(ConnectionCatalog.ConsoleUrl("no-such-channel")=="https://docs.openclaw.ai/cli/channels","unknown software still gets a working console target");
+Check(ConnectionCatalog.Display("qqbot")=="QQ Bot"&&ConnectionCatalog.Display("openclaw-weixin")=="微信"&&ConnectionCatalog.Display("telegram","Telegram")=="Telegram","software naming follows the official ids");
+var market=JsonNode.Parse("""{"results":[{"package":{"name":"obsidian-media-claim","displayName":"Obsidian Media Claim","isOfficial":false}},{"package":{"name":"line-adapter","displayName":"某人的 LINE","isOfficial":false}},{"package":{"name":"openclaw-line","displayName":"LINE (official)","isOfficial":true}}]}""");
+Check(ConnectionCatalog.BestAdapter("line",market)?.Id=="openclaw-line","adapter search prefers the exact then official package");
+Check(ConnectionCatalog.BestAdapter("line",JsonNode.Parse("""{"results":[]}"""))==null,"no adapter results means no match instead of installing something random");
 Check(new Release("2026.9.6-beta.1","","","beta").Preview&&!new Release("2026.9.6","","","latest").Preview,"catalog channel classification");
 store.Settings.Appearance.BackgroundImage="C:/test/image.png";store.Settings.Appearance.MusicVolume=.22;store.Settings.Appearance.Playlist.Add("C:/test/music.mp3");store.Save();var reloaded=new Store(root);Check(reloaded.Settings.Appearance.MusicVolume==.22&&reloaded.Settings.Appearance.Playlist.Count==1,"personalization survives settings reload");
 var broken=Path.Combine(root,"broken");Directory.CreateDirectory(broken);File.WriteAllText(Path.Combine(broken,"package.json"),"{\"name\":\"openclaw\",\"version\":\"2026.9.6\"}");File.WriteAllText(Path.Combine(broken,"openclaw.mjs"),"process.exit(1)");Check(!await RuntimeInstall.IsReady(node,broken,"2026.9.6"),"incomplete npm install cannot appear installed");

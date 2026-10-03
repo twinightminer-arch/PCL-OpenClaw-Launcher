@@ -32,6 +32,13 @@ public sealed partial class MainWindow : Window
  // 插件页的分区与折叠按钮引用：供界面自检确认收起 / 展开真的生效。
  Button? pluginToggle;StackPanel? pluginSection;
  Button? skillToggle;StackPanel? skillSection;
+ // 0.8.7「软件连接」页：软件卡片清单 + 每张卡的三个按钮引用（自检要点它们），自检模式下只记录动作不真执行。
+ internal List<ConnectionApp> connectionApps=[];
+ readonly List<(Button Detect,Button Repair,Button Console)> connectionButtons=[];
+ internal bool dryRun;
+ internal string openedConsoleUrl="",lastConsoleTarget="",lastRepairTarget="",lastProbeTarget="",lastProbeChannel="",lastProbeOutcome="";
+ // 「软件连接」快照时间：非空表示当前卡片是按快照秒开的，后台正在刷新。
+ DateTime? channelSnapshotAt;
  // 0.8.6：进页先按本地快照铺满列表（见 LoadListCache），再后台刷新校正。
  CancellationTokenSource? refreshCancellation;
  int refreshGeneration;
@@ -57,7 +64,10 @@ public sealed partial class MainWindow : Window
   Loaded+=async(_,_)=>{if(!screenshot){await PlayOpening();if(store.Settings.Appearance.MusicAutoPlay)PlayTrack(0);
    // 实例独立性由底层自检：同一状态目录被多个实例共用会让插件与 Skill 串台，启动时就说明白。
    foreach(var problem in store.EnsureInstanceIsolation())AddLog("实例隔离检查："+problem);
-   await Refresh();timer.Start();}};
+   await Refresh();
+   // 0.8.7：先把插件 / Skill 快照预热好，用户第一次点开这两页就是瞬间全显。
+   _ = WarmListCache();
+   timer.Start();}};
   Closed+=(_,_)=>media.Close();
   timer.Tick+=async(_,_)=>{if(!busy&&refreshCancellation==null&&page is "启动总览" or "软件连接")await Refresh();};
   Closing+=(_,e)=>{
@@ -120,6 +130,8 @@ public sealed partial class MainWindow : Window
     try{live=await Query("channels","status","--probe","--timeout","20000","--json");}catch(Exception e) when(e is not OperationCanceledException){failures.Add("连接探测："+SafeLog.Clean(e.Message));}
     if(!Valid())return;
     channels=ReadModel.Channels(catalog,live,live?["channelAccounts"] is JsonObject);
+    SaveConnectionCache(selected.Id,catalog,live);
+    channelSnapshotAt=null;   // 已经有实时结果，不再标记为「快照」
     if(failures.Count>0)pageErrors[selected.Id+destination]=string.Join("\n",failures);
    }
    if(Valid()){checkedAt=DateTime.Now;refreshTimes[selected.Id+destination]=DateTime.Now;SelectPage(destination);status.Text=pageErrors.ContainsKey(selected.Id+destination)?"部分检测失败；请查看页面提示并重试":"状态已更新 · "+checkedAt.Value.ToString("HH:mm:ss");}
@@ -129,13 +141,15 @@ public sealed partial class MainWindow : Window
  string savedSelection="",savedFilter="",savedTablePage="";
  // 列表快照落在数据目录，下次进页（甚至下次启动）先用它把列表瞬间铺满，再由后台刷新校正。
  string ListCachePath(string instanceId)=>Path.Combine(store.Root,"cache","lists-"+instanceId+".json");
+ // 0.8.7：快照必须「合并」写入。插件页只查插件、Skill 页只查 Skill，若各自覆盖整份文件，
+ // 就会出现「逛完插件页再进 Skill 页要等扫描、反之亦然」——这正是 0.8.6 遗留的等待来源。
  void SaveListCache(string instanceId,JsonNode? pluginJson,JsonNode? skillJson) {
   try {
-   var root=new JsonObject();
+   if(pluginJson?["plugins"] is not JsonNode&&skillJson?["skills"] is not JsonNode)return;
+   var path=ListCachePath(instanceId);Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+   var root=File.Exists(path)&&JsonNode.Parse(File.ReadAllText(path)) is JsonObject existing?existing:new JsonObject();
    if(pluginJson?["plugins"] is JsonNode p)root["plugins"]=p.DeepClone();
    if(skillJson?["skills"] is JsonNode s)root["skills"]=s.DeepClone();
-   if(root.Count==0)return;
-   var path=ListCachePath(instanceId);Directory.CreateDirectory(Path.GetDirectoryName(path)!);
    File.WriteAllText(path,root.ToJsonString());
   } catch(IOException) {} catch(UnauthorizedAccessException) {} catch(System.Text.Json.JsonException) {}
  }
@@ -150,10 +164,80 @@ public sealed partial class MainWindow : Window
    return loaded;
   } catch(IOException) {return false;} catch(UnauthorizedAccessException) {return false;} catch(InvalidOperationException) {return false;} catch(System.Text.Json.JsonException) {return false;}
  }
+ // 0.8.7：软件连接页同样要先吃快照。频道清单（channels list --all）与状态（channels status）都落盘，
+ // 打开页面立刻按上次结果铺满软件卡片，再由后台刷新校正——绝不让用户盯着「正在读取官方清单」。
+ string ConnectionCachePath(string instanceId)=>Path.Combine(store.Root,"cache","connections-"+instanceId+".json");
+ void SaveConnectionCache(string instanceId,JsonNode? catalog,JsonNode? live) {
+  try {
+   if(catalog==null&&live==null)return;
+   var path=ConnectionCachePath(instanceId);Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+   var root=File.Exists(path)&&JsonNode.Parse(File.ReadAllText(path)) is JsonObject existing?existing:new JsonObject();
+   if(catalog!=null)root["catalog"]=catalog.DeepClone();
+   if(live!=null)root["live"]=live.DeepClone();
+   root["savedAt"]=DateTime.Now.ToString("o");
+   File.WriteAllText(path,root.ToJsonString());
+  } catch(IOException) {} catch(UnauthorizedAccessException) {} catch(System.Text.Json.JsonException) {}
+ }
+ bool LoadConnectionCache(string instanceId) {
+  try {
+   var path=ConnectionCachePath(instanceId);if(!File.Exists(path))return false;
+   if(JsonNode.Parse(File.ReadAllText(path)) is not JsonObject root)return false;
+   if(root["catalog"] is JsonNode catalog)channelCatalog=catalog.DeepClone();
+   var live=root["live"] as JsonNode;
+   if(channelCatalog==null&&live==null)return false;
+   // 只有快照里真的带 channelAccounts（网关当时的实时结果）才允许显示在线状态，避免旧数据冒充「已连接」。
+   channels=ReadModel.Channels(channelCatalog,live,live?["channelAccounts"] is JsonObject);
+   channelSnapshotAt=DateTime.TryParse(ReadModel.S(root,"savedAt"),out var at)?at:null;
+   return channels.Count>0;
+  } catch(IOException) {return false;} catch(UnauthorizedAccessException) {return false;} catch(InvalidOperationException) {return false;} catch(System.Text.Json.JsonException) {return false;}
+ }
+ // 0.8.7：启动后台预热快照 —— 让「第一次点开插件 / Skill / 软件连接页」也是瞬间全显，而不是第一次必须等扫描。
+ // warmSummary 记录每一步的结果，界面自检与排障都读它（不靠猜）。
+ internal string warmSummary="";
+ async Task WarmListCache(bool force=false) {
+  var report=new List<string>();
+  try {
+   var instance=current;var path=ListCachePath(instance.Id);
+   if(force||!File.Exists(path)||DateTime.Now-File.GetLastWriteTime(path)>=TimeSpan.FromMinutes(10)) {
+    var pluginTask=runner.Run(instance,["plugins","list","--json"],300,CancellationToken.None);
+    var skillTask=runner.Run(instance,["skills","list","--json"],300,CancellationToken.None);
+    var results=await Task.WhenAll(pluginTask,skillTask);
+    var pluginJson=results[0].Ok?results[0].Json():null;var skillJson=results[1].Ok?results[1].Json():null;
+    report.Add("插件="+(pluginJson==null?"无("+SafeLog.Clean(results[0].Summary)+")":ReadModel.Plugins(pluginJson).Count.ToString()));
+    report.Add("Skill="+(skillJson==null?"无("+SafeLog.Clean(results[1].Summary)+")":ReadModel.Skills(skillJson).Count.ToString()));
+    if(!closing&&current.Id==instance.Id) {
+     if(pluginJson!=null||skillJson!=null)SaveListCache(instance.Id,pluginJson,skillJson);
+     // 用户此刻若正停在需要这两份列表的页面上，顺手把空列表补上（不动已有数据，也不打断输入）。
+     if(page is "插件管理" or "Skills 管理" or "实例设置" or "整合包") {
+      var filled=false;
+      if(pluginJson!=null&&plugins.Count==0&&page is "插件管理" or "实例设置"){plugins=ReadModel.Plugins(pluginJson);filled=true;}
+      if(skillJson!=null&&skills.Count==0&&page is "Skills 管理" or "实例设置"){skills=ReadModel.Skills(skillJson);filled=true;}
+      if(filled)SelectPage(page);
+     }
+     report.Add("列表快照="+(File.Exists(path)?"已写入 "+new FileInfo(path).Length+" 字节":"未写入"));
+    }
+   } else report.Add("插件/Skill 快照仍新鲜，跳过预热");
+   // 频道清单与状态也一起预热（比插件扫描快，且「软件连接」页完全依赖它）。
+   var connectionPath=ConnectionCachePath(instance.Id);
+   if(force||!File.Exists(connectionPath)||DateTime.Now-File.GetLastWriteTime(connectionPath)>=TimeSpan.FromMinutes(10)) {
+    var catalogResult=await runner.Run(instance,["channels","list","--all","--json"],180,CancellationToken.None);
+    var statusResult=await runner.Run(instance,["channels","status","--json"],120,CancellationToken.None);
+    if(closing||current.Id!=instance.Id){report.Add("软件连接=实例已切换，丢弃（"+instance.Name+"→"+current.Name+"）");warmSummary=string.Join("；",report);return;}
+    var catalog=catalogResult.Ok?catalogResult.Json():null;var live=statusResult.Ok?statusResult.Json():null;
+    report.Add("官方频道清单="+(catalog==null?"无("+SafeLog.Clean(catalogResult.Summary)+")":"就绪"));
+    if(catalog!=null||live!=null)SaveConnectionCache(instance.Id,catalog,live);
+    report.Add("软件连接快照="+(File.Exists(connectionPath)?"已写入 "+new FileInfo(connectionPath).Length+" 字节":"未写入"));
+    if(channels.Count==0&&LoadConnectionCache(instance.Id)&&page=="软件连接")SelectPage(page);
+   } else report.Add("软件连接快照仍新鲜，跳过预热");
+   AddLog("已预热列表快照（"+string.Join("；",report)+"）。");
+  }catch(OperationCanceledException){report.Add("预热被取消");}catch(Exception e){report.Add("预热失败："+SafeLog.Clean(e.Message));AddLog("列表预热未完成："+SafeLog.Clean(e.Message));}
+  warmSummary=string.Join("；",report);
+ }
  void SelectPage(string name) {
   if(activeGrid!=null){savedSelection=(activeGrid.SelectedItem as ItemRow)?.Id??"";savedFilter=filter?.Text??"";savedTablePage=page;}
-  // 0.8.6：插件 / Skill 列表先吃本地快照，做到「点开即全显」，不等后台扫描。
+  // 0.8.7：插件 / Skill / 软件连接三种列表都先吃本地快照，做到「点开即全显」，不等后台扫描。
   if(plugins.Count==0||skills.Count==0)LoadListCache(current.Id);
+  if(name=="软件连接"&&channels.Count==0)LoadConnectionCache(current.Id);
   page=name;body.IsEnabled=!busy;if(name=="操作日志")log.Text=string.Join(Environment.NewLine,logLines);pageTitle.Text=name;body.Children.Clear();activeGrid=null;filter=null;
   UpdateNavigation();
   if(pageErrors.TryGetValue(current.Id+name,out var failure))body.Children.Add(Card("检测未完成",Text(failure,12,"#D9363E"),Text("下方列表如有内容，是上次检测结果。点击右上角刷新重试。")));
@@ -497,39 +581,97 @@ public sealed partial class MainWindow : Window
  }
  void ChannelPage() {
   pageTitle.Text="软件连接";
-  pageNote.Text="两类连接：插件直连（如 Wallpaper Engine）与 API 密钥（Token）直连。绿：已连接/探测通过，黄：未验证，红：异常，灰：未配置。";
-  // —— 插件链接 ——
+  pageNote.Text="所有软件都通过 OpenClaw 插件接入：这里直接读 OpenClaw 官方频道清单，把能连接与已连接的软件逐张列出来。绿：已连接，黄：待验证/未配置，红：异常，灰：未装适配器插件。";
+  pageNote.TextTrimming=TextTrimming.CharacterEllipsis;
+  // 0.8.7：卡片先按上次读取的官方清单秒开，后台刷新校正——需要等待的只有「检测连接」这种主动探测。
+  if(channelSnapshotAt!=null)pageNote.Text="显示上次读取的官方清单（"+channelSnapshotAt.Value.ToString("HH:mm")+"），后台正在刷新；"+pageNote.Text;
+  // 0.8.7：组装软件列表——官方频道清单（channels list --all）× 适配器插件（plugins list 的 channelIds）。
+  connectionApps=ConnectionCatalog.Apps(plugins,channels);
+  var search=Input("",350);search.ToolTip="按软件名、账号或状态筛选";
   body.Children.Add(SectionTitle("插件链接"));
-  body.Children.Add(WallpaperConnectionCard());
-  // —— API 密钥链接（Token）——
-  body.Children.Add(SectionTitle("API 密钥链接（Token）"));
-  body.Children.Add(Row(Button("检测全部",()=>{if(!busy)_=Refresh();}),Button("配置账号",()=>OpenWizard(["channels","add"]))));
-  var search=Input("",350);search.ToolTip="筛选应用名称、账号或状态";body.Children.Add(Toolbar(Label("查找应用"),search));
+  body.Children.Add(Toolbar(Label("查找软件"),search,Button("检测全部",()=>{if(!busy)_ = Refresh();}),Button("配置账号（向导）",()=>OpenWizard(["channels","add"]))));
   var cards=new StackPanel();body.Children.Add(cards);
-  void Render(){cards.Children.Clear();foreach(var item in channels.Where(r=>(r.Name+" "+r.Account+" "+r.State).Contains(search.Text,StringComparison.OrdinalIgnoreCase))) {
-   var name=new StackPanel{Orientation=Orientation.Horizontal};name.Children.Add(Text(item.Name,16,"#444444"));
-   name.Children.Add(new System.Windows.Shapes.Ellipse{Width=9,Height=9,Fill=Brush(item.Indicator),Margin=new Thickness(9,0,0,8),VerticalAlignment=VerticalAlignment.Center,ToolTip=item.State});
-   var actions=Row(AsyncButton("检测连接",()=>ProbeChannel(item)),Button("配置",()=>OpenWizard(["channels","add","--channel",item.Id])),Button("登录",()=>OpenWizard(item.Account.Length>0?["channels","login","--channel",item.Id,"--account",item.Account]:["channels","login","--channel",item.Id])));
-   actions.IsEnabled=item.Id.Length>0;
-   cards.Children.Add(Card("",name,Text(item.State+(item.Account.Length>0?" · 账号 "+item.Account:""),13,item.Indicator),Text(item.Detail,11),actions));
+  void Render() {
+   cards.Children.Clear();connectionButtons.Clear();
+   // Wallpaper Engine 是纯插件型连接（没有聊天频道），保留在最前面当模板。
+   cards.Children.Add(WallpaperConnectionCard());
+   var query=search.Text.Trim();
+   var list=connectionApps.Where(a=>query.Length==0||(a.Name+" "+a.Accounts+" "+a.State+" "+a.Id+" "+a.PluginPackage).Contains(query,StringComparison.OrdinalIgnoreCase)).ToList();
+   foreach(var app in list)cards.Children.Add(ConnectionCard(app));
+   if(list.Count==0)cards.Children.Add(Toolbar(Text(connectionApps.Count==0?(refreshCancellation!=null?"正在读取 OpenClaw 官方频道清单…":"尚未加载：点右上角 ↻ 或「检测全部」读取官方清单。"):"没有匹配的软件。",12)));
   }
-  if(channels.Count==0)cards.Children.Add(Toolbar(Text("正在等待检测结果；点击“检测全部”加载应用列表。",12)));}
   search.TextChanged+=(_,_)=>Render();Render();
+ }
+ // 0.8.7：每个软件一张卡（与 Wallpaper Engine 同构）：状态灯 + 三个按钮——检测连接 / 修复插件 / 打开网页控制台。
+ UIElement ConnectionCard(ConnectionApp app) {
+  var title=new StackPanel{Orientation=Orientation.Horizontal};title.Children.Add(Text(app.Name,16,"#444444"));
+  title.Children.Add(new System.Windows.Shapes.Ellipse{Width=9,Height=9,Fill=Brush(app.Indicator),Margin=new Thickness(9,0,0,8),VerticalAlignment=VerticalAlignment.Center,ToolTip=app.State});
+  var detect=AsyncButton("检测连接",()=>ProbeConnection(app));
+  var repair=AsyncButton("修复插件",()=>RepairAdapter(app));
+  var console=Button("打开网页控制台",()=>OpenConsole(app));
+  connectionButtons.Add((detect,repair,console));
+  return Card("",title,Text(app.Summary,13,app.Indicator),Text(app.Detail.Length>0?app.Detail:"状态来自 OpenClaw 官方设置；账号与凭据都在 OpenClaw 里，启动器不保存任何密钥。",11),Row(detect,repair,console));
+ }
+ // 检测连接：跑官方 channels status --probe，拿真实探测结果刷新这张卡。
+ async Task ProbeConnection(ConnectionApp app) {
+  lastProbeTarget=app.Id;   // 自检据此确认按钮真的点到了这个软件
+  var target=channels.FirstOrDefault(r=>r.Id==app.Id&&r.Account.Length>0)??channels.FirstOrDefault(r=>r.Id==app.Id);
+  if(target==null) {await Json("channels","status","--channel",app.Id,"--probe","--timeout","20000","--json");lastProbeOutcome="官方探测完成："+app.Id;return;}
+  // 网关没起来时，官方探测会先重试连接约 40 秒才报「网关不可达」；先确认一次网关，给用户一句明白话，别让他干等。
+  if(ReadModel.B(gateway?["rpc"],"ok")!=true) {
+   var check=await runner.Run(current,["gateway","status","--json"],20,cancellation?.Token??default);
+   if(check.Json() is JsonNode fresh)gateway=fresh;
+  }
+  if(ReadModel.B(gateway?["rpc"],"ok")!=true) {
+   lastProbeOutcome="网关未运行，已跳过探测（"+app.Name+"）";
+   AddLog("「"+app.Name+"」连接检测已跳过：网关未运行。先启动网关，再点检测连接。");
+   if(!dryRun)throw new Exception("网关未运行：先到「启动总览」启动 OpenClaw 网关，然后再检测「"+app.Name+"」的连接。");
+   return;
+  }
+  await ProbeChannel(target);
+ }
+ // 修复插件：把该软件的适配器插件修成本实例可用——没启用就启用；装都没装就从 ClawHub 找官方适配器装。
+ async Task RepairAdapter(ConnectionApp app) {
+  if(dryRun) {AddLog("（自检）修复插件将执行："+(app.AdapterInstalled?(app.PluginEnabled?"重新启用 ":"启用 ")+app.PluginId:"从 ClawHub 安装 "+app.Id+" 适配器"));lastRepairTarget=app.Id;return;}
+  await Operate(async()=>{
+   if(app.AdapterInstalled) {
+    if(app.AdapterReady){AddLog("适配器 "+app.PluginPackage+" 已安装并启用，无需修复。");}
+    else {await Execute("plugins","enable",app.PluginId);AddLog("已启用适配器 "+app.PluginPackage+"；如网关正在运行，重启网关后生效。");}
+   } else {
+    var search=await Json("plugins","search",app.Id,"--json","--limit","10");
+    var match=ConnectionCatalog.BestAdapter(app.Id,search);
+    if(match==null){AddLog("ClawHub 没有搜到「"+app.Name+"」的适配器插件；请在插件市场里按关键词挑选安装。");Navigate("插件市场");return;}
+    var result=await runner.Run(current,["plugins","install",match.Id,"--acknowledge-clawhub-risk","--force"],600,cancellation?.Token??default);
+    AddLog((result.Ok?"已安装适配器 ":"安装适配器失败（")+match.Id+(result.Ok?"）":"）："+SafeLog.Clean(result.Summary)));
+    if(!result.Ok)throw new Exception(result.Summary);
+   }
+   plugins=[];skills=[];await Refresh();
+  });
+ }
+ // 打开网页控制台：该软件的官方后台 / 网页端；没收录的一律给 OpenClaw 频道文档，保证按钮不空转。
+ void OpenConsole(ConnectionApp app) {
+  var url=app.ConsoleUrl;
+  if(dryRun){AddLog("（自检）打开网页控制台将打开："+url);openedConsoleUrl=url;lastConsoleTarget=app.Id;return;}
+  OpenLink(url);AddLog("已打开 "+app.Name+" 的网页控制台："+url);
  }
  async Task ProbeChannel(ItemRow row) {
   var selected=current;
+  lastProbeTarget=row.Id;   // 自检用它确认「检测连接」真的点到了官方探测命令
   try {
    var value=await Json("channels","status","--channel",row.Id,"--probe","--timeout","20000","--json");
+   lastProbeChannel=row.Id;   // 官方探测真的跑完了（自检据此判定「检测连接」不是空按钮）
    if(current!=selected)return;
    var next=ReadModel.Channels(channelCatalog,value,value["channelAccounts"] is JsonObject).Where(r=>r.Id==row.Id).ToList();
    channels.RemoveAll(r=>r.Id==row.Id);channels.AddRange(next.Count>0?next:[row with {State="未验证",Detail="网关未返回该应用的运行数据。"}]);
-  }catch(Exception e) when(e is not OperationCanceledException){channels=channels.Select(r=>r.Id==row.Id?r with {State="检测失败",Detail=SafeLog.Clean(e.Message)}:r).ToList();}
+  }catch(Exception e) when(e is not OperationCanceledException){lastProbeChannel=row.Id;channels=channels.Select(r=>r.Id==row.Id?r with {State="检测失败",Detail=SafeLog.Clean(e.Message)}:r).ToList();}
   if(page=="软件连接")SelectPage(page);
+  lastProbeOutcome="官方探测完成："+row.Id+" → "+(channels.FirstOrDefault(r=>r.Id==row.Id)?.State??"未知");
  }
  UIElement WallpaperConnectionCard() {
   var title=new StackPanel{Orientation=Orientation.Horizontal};title.Children.Add(Text("Wallpaper Engine",16,"#444444"));
   var label=Text("点击检测本地壁纸库与网页组件",12);var light=new System.Windows.Shapes.Ellipse{Width=9,Height=9,Fill=Brush("#999999"),Margin=new Thickness(9,0,0,8),VerticalAlignment=VerticalAlignment.Center};title.Children.Add(light);
-  return Card("",title,label,Row(Button("检测连接",()=>{
+  var console=AsyncButton("打开网页控制台",OpenDashboard);
+  var detect=Button("检测连接",()=>{
    try{var configPath=current.Config.Length>0?current.Config:Path.Combine(current.State.Length>0?current.State:Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),".openclaw"),"openclaw.json");
     var cfg=JsonNode.Parse(File.ReadAllText(configPath));var plugin=cfg?["plugins"]?["entries"]?["wallpaper-engine"];
     var library=ReadModel.S(plugin?["config"],"libraryRoot");var ui=ReadModel.S(plugin?["config"],"controlUiRoot");
@@ -539,7 +681,9 @@ public sealed partial class MainWindow : Window
     light.Fill=Brush(ready?"#248B69":"#D9363E");
     label.Text=ready?$"本地库可用 · {count} 项 · 网页组件已安装；在控制台点击“壁纸”测试网关连接。":(plugin==null?"本实例未安装 Wallpaper Engine 插件，点击「修复插件」即可为本实例安装并启用。":"尚未就绪：请检查插件启用状态、壁纸库目录与网页组件；必要时点击「修复插件」。");
    }catch(Exception e){light.Fill=Brush("#D9363E");label.Text=SafeLog.Clean(e.Message);}
-  }),Button("修复插件",()=>_ = RepairWallpaper()),AsyncButton("打开网页控制台",OpenDashboard)));
+  });
+  connectionButtons.Add((detect,Button("修复插件",()=>_ = RepairWallpaper()),console));
+  return Card("",title,label,Row(detect,Button("修复插件",()=>_ = RepairWallpaper()),console));
  }
  // 为当前实例安装/修复 Wallpaper Engine 插件（连接或复制到受管实例扩展目录并写配置），随后跳到插件管理刷新。
  async Task RepairWallpaper() {
