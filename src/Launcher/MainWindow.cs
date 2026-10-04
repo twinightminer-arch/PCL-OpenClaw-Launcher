@@ -45,6 +45,12 @@ public sealed partial class MainWindow : Window
  internal int lastLockCleared;
  // 「软件连接」快照时间：非空表示当前卡片是按快照秒开的，后台正在刷新。
  DateTime? channelSnapshotAt;
+ // 0.8.8：周期自动检测专用——记住上次 TCP 探测到的网关在线状态。
+ // 官方 CLI 单次调用实测「8 秒起」（CLI 引导 + 153 个插件索引），定时器每 60 秒跑一次就等于
+ // 每分钟抢 8 秒 CPU/IO，浏览器里正在用的 OpenClaw 控制台会跟着发涩——
+ // 典型症状就是「切换对话 / 文字显示卡顿」。现在周期性只做毫秒级 TCP 探测，
+ // 在线状态没变就直接收工，只有真正发生变化才去跑那次昂贵的 CLI。
+ bool? lastGatewayReady;
  // 0.8.6：进页先按本地快照铺满列表（见 LoadListCache），再后台刷新校正。
  CancellationTokenSource? refreshCancellation;
  int refreshGeneration;
@@ -81,7 +87,7 @@ public sealed partial class MainWindow : Window
    _ = StartBackgroundWarmup();
    timer.Start();}};
   Closed+=(_,_)=>media.Close();
-  timer.Tick+=async(_,_)=>{if(!busy&&refreshCancellation==null&&page is "启动总览" or "软件连接")await Refresh();};
+  timer.Tick+=async(_,_)=>{if(!busy&&refreshCancellation==null&&page is "启动总览" or "软件连接")await Refresh(auto:true);};
   Closing+=(_,e)=>{
    closing=true;timer.Stop();refreshCancellation?.Cancel();cancellation?.Cancel();
    foreach(var process in owned.Values)try{if(!process.HasExited)process.Kill(true);}catch(InvalidOperationException){}
@@ -133,7 +139,7 @@ public sealed partial class MainWindow : Window
  JsonNode? channelCatalog;
  readonly Dictionary<string,string> pageErrors=new();
  internal string ProbeState()=>"page="+page+"; plugins="+plugins.Count+"; skills="+skills.Count+"; status="+status.Text+"; errors=["+string.Join(" | ",pageErrors.Values)+"]; node="+store.Settings.Node+"; entry="+current.Entry;
- internal async Task Refresh() {  refreshCancellation?.Cancel();
+ internal async Task Refresh(bool auto=false) {  refreshCancellation?.Cancel();
   var source=new CancellationTokenSource();refreshCancellation=source;
   var token=source.Token;var generation=++refreshGeneration;var selected=current;var destination=page;
   bool Valid()=>!closing&&!token.IsCancellationRequested&&generation==refreshGeneration&&current==selected&&page==destination;
@@ -142,7 +148,16 @@ public sealed partial class MainWindow : Window
    if(destination is not ("启动总览" or "软件连接" or "插件管理" or "Skills 管理" or "整合包"))return;
    status.Text="正在检测；首次扫描可能需要 1–2 分钟，可切换页面或取消…";
    pageErrors.Remove(selected.Id+destination);
-   if(destination=="启动总览") {var value=await Query("gateway","status","--json");if(!Valid())return;gateway=value;}
+   if(destination=="启动总览") {
+    // 0.8.8：周期自动刷新先做毫秒级 TCP 探测；网关在线状态没变就不去跑昂贵的官方 CLI。
+    if(auto) {
+     var endpoint=EndpointOf(selected);
+     var probe=await ConsoleLauncher.AlreadyRunningAsync(endpoint.Host,endpoint.Port,token);
+     if(lastGatewayReady==probe.Ready)return;   // 状态没变 —— 不抢 CPU，也不重绘
+     lastGatewayReady=probe.Ready;
+    }
+    var value=await Query("gateway","status","--json");if(!Valid())return;gateway=value;
+   }
    // 插件 / Skill 列表由「实例设置」下的插件页、Skill 页与整合包页共用，取一次后写入本地快照。
    JsonNode? rawPlugins=null,rawSkills=null;
    if(destination is "插件管理" or "整合包"){rawPlugins=await Query("plugins","list","--json");if(!Valid())return;plugins=ReadModel.Plugins(rawPlugins);}
@@ -153,16 +168,26 @@ public sealed partial class MainWindow : Window
     try{catalog=await Query("channels","list","--all","--json");}catch(Exception e) when(e is not OperationCanceledException){failures.Add("应用列表："+SafeLog.Clean(e.Message));}
     if(!Valid())return;channelCatalog=catalog;
     // Channel RPC is its own reachability proof; an unrelated service-manager probe must not gate it.
-    try{live=await Query("channels","status","--probe","--timeout","20000","--json");}catch(Exception e) when(e is not OperationCanceledException){failures.Add("连接探测："+SafeLog.Clean(e.Message));}
-    if(!Valid())return;
+    // 0.8.8：--probe 要真去连每一个软件（单次超时 20 秒），是这一页最贵的动作。
+    // 周期自动刷新不再跑它，只在用户手动点「检测」时才跑——避免每分钟一次的长耗时抢占。
+    if(!auto){try{live=await Query("channels","status","--probe","--timeout","20000","--json");}catch(Exception e) when(e is not OperationCanceledException){failures.Add("连接探测："+SafeLog.Clean(e.Message));}
+    if(!Valid())return;}
     channels=ReadModel.Channels(catalog,live,live?["channelAccounts"] is JsonObject);
     SaveConnectionCache(selected.Id,catalog,live);
-    channelSnapshotAt=null;   // 已经有实时结果，不再标记为「快照」
+    if(live!=null)channelSnapshotAt=null;   // 确实拿到实时结果，才取消「快照」标记
     if(failures.Count>0)pageErrors[selected.Id+destination]=string.Join("\n",failures);
    }
    if(Valid()){checkedAt=DateTime.Now;refreshTimes[selected.Id+destination]=DateTime.Now;SelectPage(destination);status.Text=pageErrors.ContainsKey(selected.Id+destination)?"部分检测失败；请查看页面提示并重试":"状态已更新 · "+checkedAt.Value.ToString("HH:mm:ss");}
   }catch(OperationCanceledException){}catch(Exception e){if(Valid()){pageErrors[selected.Id+destination]=SafeLog.Clean(e.Message);AddLog(e.Message);SelectPage(destination);status.Text="检测失败，页面已显示原因；上次列表不代表当前状态";}}
   finally{if(refreshCancellation==source)refreshCancellation=null;source.Dispose();}
+ }
+ // 0.8.8：周期探测用——从实例配置里算出网关地址；算不出来就退回「回环 + 实例端口」。
+ static ConsoleLauncher.ConsoleEndpoint EndpointOf(Instance instance) {
+  try {
+   var path=Runner.ConfigPath(instance);
+   if(File.Exists(path)&&ConsoleLauncher.FromConfig(File.ReadAllText(path),instance.Port) is ConsoleLauncher.ConsoleEndpoint endpoint)return endpoint;
+  } catch(IOException) {} catch(UnauthorizedAccessException) {} catch(System.Text.Json.JsonException) {}
+  return ConsoleLauncher.ProbeEndpoint("",instance.Port);
  }
  string savedSelection="",savedFilter="",savedTablePage="";
  // 列表快照落在数据目录，下次进页（甚至下次启动）先用它把列表瞬间铺满，再由后台刷新校正。

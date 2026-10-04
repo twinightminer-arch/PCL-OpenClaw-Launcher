@@ -135,7 +135,19 @@ public sealed partial class MainWindow
   body.Children.Add(Card("运行环境",Text("官方发布产物里必须带 dist/build-info.json，OpenClaw 靠它判断启动迁移是否已经跑过；缺了就会每次启动重跑一遍（实测多花约 50 秒）。启动迁移租约被强杀的上一次启动占住时，之后每次启动都会直接失败——两件事这里都能一键修。",11,"#888888"),Text(RuntimeDoctor.Summary(current),12),Row(AsyncButton("体检并修复",RepairRuntime),Button("打开状态目录",()=>{try{var dir=RuntimeDoctor.StateDirectory(current);Directory.CreateDirectory(dir);Process.Start(new ProcessStartInfo(dir){UseShellExecute=true});}catch(Exception e){Error(e);}}))));
   body.Children.Add(Card("启动器",Text("OCL "+Brand.Version+"  ·  PCL 风格 OpenClaw 独立启动器",12),Text("PCL 原作者：龙腾猫跃。本程序为第三方独立二次创作。",11,"#999999")));
  }
- void AnimateContent() {if(screenshot||!store.Settings.Appearance.Animations)return;body.BeginAnimation(OpacityProperty,new DoubleAnimation(0,1,TimeSpan.FromMilliseconds(170)));var move=new TranslateTransform();body.RenderTransform=move;move.BeginAnimation(TranslateTransform.YProperty,new DoubleAnimation(8,0,TimeSpan.FromMilliseconds(210)){EasingFunction=new QuadraticEase{EasingMode=EasingMode.EaseOut}});}
+ // 0.8.8：动画结束必须把 Opacity 动画与 RenderTransform 摘掉。
+ // 否则 DoubleAnimation 默认 FillBehavior=HoldEnd 会把 Opacity 一直「挂」在动画上，
+ // 容器上还永久留着一层 RenderTransform；WPF 会一直按「半透明 + 带变换」的图层来合成，
+ // 容器里所有文字每次重绘都要重新光栅化（发虚、滚动与切换发涩）。
+ void AnimateContent() {
+  if(screenshot||!store.Settings.Appearance.Animations)return;
+  var fade=new DoubleAnimation(0,1,TimeSpan.FromMilliseconds(170));
+  var move=new TranslateTransform();body.RenderTransform=move;
+  var slide=new DoubleAnimation(8,0,TimeSpan.FromMilliseconds(210)){EasingFunction=new QuadraticEase{EasingMode=EasingMode.EaseOut}};
+  slide.Completed+=(_,_)=>{body.BeginAnimation(OpacityProperty,null);body.Opacity=1;body.RenderTransform=null;};
+  body.BeginAnimation(OpacityProperty,fade);
+  move.BeginAnimation(TranslateTransform.YProperty,slide);
+ }
  UIElement BrandPair(double size,double gap) {
   var pair=new StackPanel{Orientation=Orientation.Horizontal,HorizontalAlignment=HorizontalAlignment.Center,Margin=new Thickness(0,0,0,14)};
   pair.Children.Add(new Image{Source=Brand.Image(),Width=size,Height=size,Stretch=Stretch.Fill,Margin=new Thickness(0,0,gap,0),ToolTip="OCL"});
