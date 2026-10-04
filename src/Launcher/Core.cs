@@ -16,6 +16,8 @@ public sealed class Instance
  public string Config { get; set; } = "";
  public int Port { get; set; } = 18789;
  public bool Managed { get; set; }
+ // 0.8.8：置顶（心形）标记——置顶实例在「版本选择」页排在前面。
+ public bool Pinned { get; set; }
  public override string ToString() => Name;
  public string Entry => Path.Combine(Runtime,"openclaw.mjs");
  public string Version { get { try { return JsonNode.Parse(File.ReadAllText(Path.Combine(Runtime,"package.json")))?["version"]?.ToString() ?? "未知"; } catch { return "未找到"; } } }
@@ -182,6 +184,17 @@ public sealed class Store
   if(string.IsNullOrWhiteSpace(name)) throw new Exception("实例名称不能为空。");
   instance.Name=name.Trim(); Save();
  }
+ // 0.8.8：删除实例。至少保留一个；独立实例会一并删除其状态目录（含配置与插件），
+ // 默认（已有安装）实例没有独立状态目录则不删除用户真实目录，只从列表移除。
+ public void Delete(Instance instance) {
+  if(Settings.Instances.Count<=1) throw new Exception("至少保留一个实例，无法删除最后一个实例。");
+  if(instance.Managed&&instance.State.Length>0&&Directory.Exists(instance.State)) {
+   try { Directory.Delete(instance.State,true); } catch(IOException) {} catch(UnauthorizedAccessException) {}
+  }
+  Settings.Instances.Remove(instance);
+  if(Settings.Selected==instance.Id&&Settings.Instances.Count>0) Settings.Selected=Settings.Instances[0].Id;
+  Save();
+ }
  public Instance Duplicate(Instance source,string name) {
   // 复制出的实例始终是独立受管实例：拥有自己的状态目录与配置，端口/令牌重写以免冲突。
   var clone=new Instance { Name=name.Trim(),Runtime=source.Runtime,Port=Math.Max(1024,Settings.Instances.Max(i=>i.Port)+1),Managed=true };
@@ -304,7 +317,7 @@ public sealed class Runner
  public event Action<string>? Log;
  public Runner(string node) {Node=node;}
  public ProcessStartInfo StartInfo(Instance instance,IEnumerable<string> args) {
-  if(!File.Exists(instance.Entry))throw new Exception("所选目录没有 openclaw.mjs，请在版本与实例中选择 OpenClaw 安装目录。");
+  if(!File.Exists(instance.Entry))throw new Exception("所选目录没有 openclaw.mjs，请在版本选择中选择 OpenClaw 安装目录。");
   var psi = new ProcessStartInfo(Node) {WorkingDirectory=instance.Runtime,UseShellExecute=false,CreateNoWindow=true,RedirectStandardOutput=true,RedirectStandardError=true,RedirectStandardInput=true,StandardOutputEncoding=Encoding.UTF8,StandardErrorEncoding=Encoding.UTF8};
   psi.ArgumentList.Add(instance.Entry); foreach(var arg in args)psi.ArgumentList.Add(arg);
   // Explicit selection must not inherit another instance's routing.

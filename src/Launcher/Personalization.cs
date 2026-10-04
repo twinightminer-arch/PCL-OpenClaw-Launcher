@@ -12,6 +12,8 @@ public sealed partial class MainWindow
  readonly MediaPlayer media=new();
  int trackIndex=-1;bool musicPaused;bool mediaInitialized;
  TextBlock? trackLabel;
+ // 0.8.8：壁纸模糊烘焙缓存——只在图片或模糊值真正变化时才重新解码/烘焙，避免每次改外观都重做。
+ string lastWallpaperPath="";double lastWallpaperBlur=-1;
  void ApplyAppearance() {
   var a=store.Settings.Appearance;Color accent;try{accent=(Color)ColorConverter.ConvertFromString(a.Accent);}catch{accent=Color.FromRgb(200,50,60);}
   Resources["AccentBrush"]=new SolidColorBrush(accent);Resources["AccentSoft"]=new SolidColorBrush(Color.FromArgb(25,accent.R,accent.G,accent.B));
@@ -20,15 +22,41 @@ public sealed partial class MainWindow
   ApplyTitleContrast(accent);
   if(titleBar.Child is Grid titleGrid&&titleGrid.Children[0] is TextBlock titleLabel)titleLabel.Text=a.TitleText;
   Resources["CardBrush"]=new SolidColorBrush(Color.FromArgb((byte)(255*Math.Clamp(a.CardOpacity,.2,1)),255,255,255));sidebarSurface.Background=new SolidColorBrush(Color.FromArgb((byte)(255*Math.Clamp(a.SidebarOpacity,.1,1)),255,255,255));
-  FontSize=Math.Clamp(a.FontSize,11,17);wallpaper.Opacity=Math.Clamp(a.BackgroundOpacity,0,1);wallpaper.Effect=new BlurEffect{Radius=Math.Clamp(a.BackgroundBlur,0,40)};
+  FontSize=Math.Clamp(a.FontSize,11,17);wallpaper.Opacity=Math.Clamp(a.BackgroundOpacity,0,1);
   wallpaper.Stretch=Enum.TryParse<Stretch>(a.BackgroundFit,out var stretch)?stretch:Stretch.UniformToFill;
-  if(a.BackgroundImage.Length>0&&File.Exists(a.BackgroundImage)) {
-   try{var bitmap=new BitmapImage();bitmap.BeginInit();bitmap.CacheOption=BitmapCacheOption.OnLoad;bitmap.DecodePixelWidth=2400;bitmap.UriSource=new Uri(Path.GetFullPath(a.BackgroundImage));bitmap.EndInit();bitmap.Freeze();wallpaper.Source=bitmap;}catch(Exception e){wallpaper.Source=null;AddLog("背景图片无法读取："+e.Message);}
-  }else wallpaper.Source=null;
+  RenderWallpaper();
   media.Volume=Math.Clamp(a.MusicVolume,0,1);
   if(!mediaInitialized){mediaInitialized=true;media.MediaEnded+=(_,_)=>{if(store.Settings.Appearance.MusicRepeat||trackIndex+1<store.Settings.Appearance.Playlist.Count)NextTrack();else{media.Stop();musicBadge.Text="♫  播放结束";}};media.MediaFailed+=(_,e)=>{media.Stop();musicBadge.Text="♫  播放失败";if(trackLabel!=null)trackLabel.Text="无法播放："+e.ErrorException.Message;AddLog("音乐播放失败："+e.ErrorException.Message);};}
  }
  void SaveAppearance(){store.Save();ApplyAppearance();}
+ // 0.8.8：把模糊烘焙进一张冻结的位图，稳态下窗口不再挂实时 BlurEffect——
+ // 否则每当界面有任何重绘（切页动画、状态灯更新、hover）都要对整张壁纸重做高斯模糊，
+ // 全屏大图 + 大半径模糊会拖垮整条渲染管线，连带让桌面动态壁纸都卡成幻灯片。
+ // 拖动模糊滑块时仍是实时预览（便宜），松手再烘焙成静态并卸掉实时特效。
+ void RenderWallpaper() {
+  var a=store.Settings.Appearance;var path=a.BackgroundImage;
+  if(path==lastWallpaperPath&&Math.Abs(a.BackgroundBlur-lastWallpaperBlur)<0.01){wallpaper.Effect=null;return;}
+  lastWallpaperPath=path;lastWallpaperBlur=a.BackgroundBlur;wallpaper.Effect=null;
+  if(path.Length>0&&File.Exists(path)) {
+   try {
+    var bitmap=new BitmapImage();bitmap.BeginInit();bitmap.CacheOption=BitmapCacheOption.OnLoad;bitmap.DecodePixelWidth=1920;bitmap.UriSource=new Uri(Path.GetFullPath(path));bitmap.EndInit();bitmap.Freeze();
+    if(a.BackgroundBlur>0.5) {
+     var visual=new System.Windows.Media.DrawingVisual();using(var dc=visual.RenderOpen())dc.DrawImage(bitmap,new Rect(0,0,bitmap.PixelWidth,bitmap.PixelHeight));
+     visual.Effect=new System.Windows.Media.Effects.BlurEffect{Radius=a.BackgroundBlur};
+     var rtb=new RenderTargetBitmap(bitmap.PixelWidth,bitmap.PixelHeight,96,96,PixelFormats.Pbgra32);rtb.Render(visual);rtb.Freeze();wallpaper.Source=rtb;
+    } else wallpaper.Source=bitmap;
+   } catch(Exception e){wallpaper.Source=null;AddLog("背景图片无法读取："+e.Message);}
+  } else wallpaper.Source=null;
+ }
+ // 0.8.8：模糊滑块拖动时实时预览（临时挂 BlurEffect），松手烘焙成静态并卸掉特效。
+ UIElement BlurControl() {
+  var a=store.Settings.Appearance;var label=Text("背景模糊  "+a.BackgroundBlur.ToString("0.##"),12);
+  var slider=new Slider{Minimum=0,Maximum=40,Value=Math.Clamp(a.BackgroundBlur,0,40),SmallChange=0.4,LargeChange=4};
+  slider.ValueChanged+=(_,e)=>{label.Text="背景模糊  "+e.NewValue.ToString("0.##");a.BackgroundBlur=e.NewValue;wallpaper.Effect=e.NewValue<=0.01?null:new System.Windows.Media.Effects.BlurEffect{Radius=e.NewValue};};
+  slider.PreviewMouseLeftButtonUp+=(_,_)=>{RenderWallpaper();store.Save();};
+  slider.LostKeyboardFocus+=(_,_)=>{RenderWallpaper();store.Save();};
+  var stack=new StackPanel();stack.Children.Add(label);stack.Children.Add(slider);return stack;
+ }
  UIElement SliderRow(string title,double value,double min,double max,Action<double> change,string suffix="") {
   var stack=new StackPanel();var label=Text(title+"  "+value.ToString("0.##")+suffix,12);var slider=new Slider{Minimum=min,Maximum=max,Value=Math.Clamp(value,min,max),SmallChange=(max-min)/100,LargeChange=(max-min)/10};slider.ValueChanged+=(_,e)=>{label.Text=title+"  "+e.NewValue.ToString("0.##")+suffix;change(e.NewValue);};slider.PreviewMouseLeftButtonUp+=(_,_)=>store.Save();slider.LostKeyboardFocus+=(_,_)=>store.Save();stack.Children.Add(label);stack.Children.Add(slider);return stack;
  }
@@ -42,7 +70,7 @@ public sealed partial class MainWindow
    var probe=new BitmapImage();probe.BeginInit();probe.CacheOption=BitmapCacheOption.OnLoad;probe.UriSource=new Uri(dialog.FileName);probe.EndInit();
    var folder=Path.Combine(store.Root,"appearance");Directory.CreateDirectory(folder);var dest=Path.Combine(folder,Guid.NewGuid().ToString("N")+Path.GetExtension(dialog.FileName));File.Copy(dialog.FileName,dest);a.BackgroundImage=dest;SaveAppearance();picture.Text=Path.GetFileName(dialog.FileName);
   },true),Button("清除背景",()=>{a.BackgroundImage="";SaveAppearance();picture.Text="未设置背景图片";})),Text("填充方式：裁剪铺满 / 完整显示 / 拉伸 / 原尺寸",11,"#999999"),fit,
-   SliderRow("图片可见度",a.BackgroundOpacity*100,0,100,v=>{a.BackgroundOpacity=v/100;wallpaper.Opacity=v/100;},"%"),SliderRow("背景模糊",a.BackgroundBlur,0,40,v=>{a.BackgroundBlur=v;wallpaper.Effect=new BlurEffect{Radius=v};})));
+   SliderRow("图片可见度",a.BackgroundOpacity*100,0,100,v=>{a.BackgroundOpacity=v/100;wallpaper.Opacity=v/100;},"%"),BlurControl()));
   body.Children.Add(Card("透明与颜色",SliderRow("卡片不透明度",a.CardOpacity*100,20,100,v=>{a.CardOpacity=v/100;Resources["CardBrush"]=new SolidColorBrush(Color.FromArgb((byte)(255*v/100),255,255,255));},"%"),SliderRow("侧栏不透明度",a.SidebarOpacity*100,10,100,v=>{a.SidebarOpacity=v/100;sidebarSurface.Background=new SolidColorBrush(Color.FromArgb((byte)(255*v/100),255,255,255));},"%"),Palette()));
   var title=Input(a.TitleText,300);var welcome=Input(a.WelcomeText,500);
   body.Children.Add(Card("自定义文字",Text("左上角标题"),title,Text("主页欢迎文字"),welcome,Button("保存文字",()=>{a.TitleText=title.Text.Trim();a.WelcomeText=welcome.Text.Trim();store.Save();if(titleBar.Child is Grid g&&g.Children[0] is TextBlock t)t.Text=a.TitleText;AddLog("个性化文字已保存。");})));

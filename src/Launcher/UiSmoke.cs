@@ -1,6 +1,7 @@
 using System.IO;
 using System.Text;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 namespace ClawLauncher;
@@ -66,7 +67,7 @@ public sealed partial class MainWindow
   if(!RuntimeDoctor.MentionsPortInUse(fakePortInUse))throw new Exception("端口占用的识别失效");
   checks.Add("PASS 启动失败归因：已有网关在跑 / 端口被占用 都能识别（并会改成直接复用那个网关）");
   File.WriteAllText(Path.Combine(directory,"warm-summary.txt"),warmSummary);
-  foreach(var name in new[]{"启动总览","版本下载","版本与实例","插件市场","软件连接","实例设置","运行环境","导入实例设置","插件管理","Skills 管理","整合包","操作日志","个性化","背景音乐","关于"}) {CapturePage(name);await Task.Delay(40);Capture(name);checks.Add("PASS page: "+name);}
+  foreach(var name in new[]{"启动总览","版本下载","版本选择","插件市场","软件连接","实例设置","运行环境","导入实例设置","插件管理","Skills 管理","整合包","操作日志","个性化","背景音乐","关于"}) {CapturePage(name);await Task.Delay(40);Capture(name);checks.Add("PASS page: "+name);}
   // 0.8.6：实例设置是「每个实例一份」的东西，进入后顶端分区导航让位给「实例设置」一项，退出即还原。
   CapturePage("实例设置");
   if(topButtons["实例设置"].Visibility!=Visibility.Visible)throw new Exception("实例设置导航项未出现");
@@ -75,6 +76,14 @@ public sealed partial class MainWindow
   if(topButtons["实例设置"].Visibility!=Visibility.Collapsed)throw new Exception("离开实例设置后导航项未隐藏");
   if(topButtons["启动"].Visibility!=Visibility.Visible)throw new Exception("离开实例设置后分区导航未还原");
   checks.Add("PASS instance-settings nav swaps in and restores the section nav");
+  // 0.8.8：版本选择页必须渲染出每个实例的横向卡片（含置顶心形按钮）与「新建实例」卡片。
+  CapturePage("版本选择");await Task.Delay(40);Capture("版本选择");
+  int HeartCount(DependencyObject e){int n=0;if(e is Button b&&b.Content is string s&&(s=="♥"||s=="♡"))n++;foreach(var c in LogicalTreeHelper.GetChildren(e))if(c is DependencyObject d)n+=HeartCount(d);return n;}
+  var hearts=HeartCount(body);
+  if(hearts<1)throw new Exception("版本选择页没有渲染出实例卡片（心形按钮数="+hearts+"）");
+  bool HasNewInstance(DependencyObject e){if(e is TextBlock t&&t.Text.Contains("新建实例"))return true;foreach(var c in LogicalTreeHelper.GetChildren(e))if(c is DependencyObject d&&HasNewInstance(d))return true;return false;}
+  if(!HasNewInstance(body))throw new Exception("版本选择页没有渲染出「新建实例」卡片");
+  checks.Add("PASS 版本选择页渲染出 "+hearts+" 个实例卡片（心形置顶 / 设置 / 删除）+ 新建实例卡片");
   // 0.8.7：插件 / Skill / 软件连接三种列表都必须「点开即全显」。
   // 启动器先自己预热快照，这里把内存清空、重新进页面——模拟「关掉启动器再打开，第一次点进去」。
   plugins=[];skills=[];channels=[];channelCatalog=null;

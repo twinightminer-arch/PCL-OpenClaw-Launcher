@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Data;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -271,7 +272,7 @@ public sealed partial class MainWindow : Window
   UpdateNavigation();
   if(pageErrors.TryGetValue(current.Id+name,out var failure))body.Children.Add(Card("检测未完成",Text(failure,12,"#D9363E"),Text("下方列表如有内容，是上次检测结果。点击右上角刷新重试。")));
   pageNote.Text=checkedAt==null?"所选实例："+current.Name:"所选实例："+current.Name+"  ·  最近检查 "+checkedAt.Value.ToString("HH:mm:ss");
-  switch(name){case "启动总览":Overview();break;case "版本与实例":Versions();break;case "插件市场":PluginMarketPage();break;case "插件管理":PluginPage();break;case "Skills 管理":SkillPage();break;case "软件连接":ChannelPage();break;case "整合包":PackPage();break;case "操作日志":LogPage();break;case "实例设置":InstanceSettingsPage();break;case "运行环境":RuntimePage();break;case "导入实例设置":ImportSettingsPage();break;case "版本下载":DownloadPage();break;case "个性化":AppearancePage();break;case "背景音乐":MusicPage();break;case "快捷方式图标":ShortcutIconPage();break;case "关于":AboutPage();break;}
+  switch(name){case "启动总览":Overview();break;case "版本选择":VersionSelectionPage();break;case "插件市场":PluginMarketPage();break;case "插件管理":PluginPage();break;case "Skills 管理":SkillPage();break;case "软件连接":ChannelPage();break;case "整合包":PackPage();break;case "操作日志":LogPage();break;case "实例设置":InstanceSettingsPage();break;case "运行环境":RuntimePage();break;case "导入实例设置":ImportSettingsPage();break;case "版本下载":DownloadPage();break;case "个性化":AppearancePage();break;case "背景音乐":MusicPage();break;case "快捷方式图标":ShortcutIconPage();break;case "关于":AboutPage();break;}
   ApplyOverviewVisibility();AnimateContent();
  }
  async Task StartGatewayCore() {
@@ -406,16 +407,24 @@ public sealed partial class MainWindow : Window
   }
   await Refresh();
  }
- void Versions() {
-  body.Children.Add(Card("已安装的实例",InstanceList()));
-  body.Children.Add(Card("当前版本",Text(current.Version,25,"#C8323C"),Text(current.Runtime),Text(current.Managed?"独立实例：配置和工作目录单独保存。":"现有安装：使用所选配置；切换版本前建议创建独立实例。")));
+ // 0.8.8：版本选择独立成页（参照 PCL 版本选择页）——每个实例一张横向卡片，含置顶心形、设置、删除。
+ // 设置按钮直接跳到该实例的「实例设置」页；删除会移除实例（独立实例同时删除状态目录）。
+ void VersionSelectionPage() {
+  pageTitle.Text="版本选择";
+  pageNote.Text="选择要使用的 OpenClaw 实例；点击心形置顶，设置进入该实例的独立设置，删除会移除该实例（独立实例同时删除状态目录）。";
+  var ordered=store.Settings.Instances.OrderByDescending(i=>i.Pinned).ThenBy(i=>store.Settings.Instances.IndexOf(i)).ToList();
+  var wrap=new WrapPanel{Margin=new Thickness(0,0,0,4)};
+  foreach(var item in ordered)wrap.Children.Add(InstanceCard(item));
+  wrap.Children.Add(NewInstanceCard());
+  body.Children.Add(Card("实例",wrap,Text("每个实例对应一份独立的 OpenClaw 版本与配置；心形置顶的实例排在最前。",11,"#999999")));
+  // 保留「切换当前实例版本目录」能力（不丢功能）。
   var runtime=Input(current.Runtime,540);
   var known=store.Settings.Instances.Select(i=>i.Runtime).ToList();var versionsFolder=Path.Combine(store.Root,"versions");
   if(Directory.Exists(versionsFolder))known.AddRange(Directory.GetDirectories(versionsFolder).Where(d=>!Path.GetFileName(d).StartsWith(".")&&File.Exists(Path.Combine(d,"ocl-install.json"))).Select(d=>Path.Combine(d,"node_modules","openclaw")).Where(d=>File.Exists(Path.Combine(d,"openclaw.mjs"))));
   var library=new ComboBox{Width=540,HorizontalAlignment=HorizontalAlignment.Left,ItemsSource=known.Distinct(StringComparer.OrdinalIgnoreCase).ToList(),SelectedItem=current.Runtime};
   library.SelectionChanged+=(_,_)=>{if(library.SelectedItem is string path)runtime.Text=path;};
-  body.Children.Add(Card("本机版本库",library,Text("选择已登记的版本后，在下方应用；新下载的版本会保存在本机版本库。")));
-  body.Children.Add(Card("选择已有版本目录",runtime,Row(Button("浏览目录",()=>{var dialog=new OpenFolderDialog();if(dialog.ShowDialog(this)==true)runtime.Text=dialog.FolderName;}),AsyncButton("应用到当前实例",async()=>{
+  body.Children.Add(Card("当前实例版本目录",library,Text("选择已登记的版本后，在下方应用；新下载的版本会保存在本机版本库。")));
+  body.Children.Add(Card("切换当前实例到所选目录",runtime,Row(Button("浏览目录",()=>{var dialog=new OpenFolderDialog();if(dialog.ShowDialog(this)==true)runtime.Text=dialog.FolderName;}),AsyncButton("应用到当前实例",async()=>{
    if(owned.TryGetValue(current.Id,out var process)&&!process.HasExited)throw new Exception("请先停止当前网关，再切换版本。");
    if(!File.Exists(Path.Combine(runtime.Text,"openclaw.mjs")))throw new Exception("该目录没有 openclaw.mjs。");
    var check=await Json("gateway","status","--json");if(ReadModel.B(check?["rpc"],"ok")==true)throw new Exception("请先停止当前网关，再切换版本。");
@@ -423,11 +432,51 @@ public sealed partial class MainWindow : Window
    current.Runtime=Path.GetFullPath(runtime.Text);store.Save();SelectPage(page);
   }))));
   body.Children.Add(Card("下载版本",Text("从完整版本列表选择正式版、预览版或历史版本，自动下载并创建实例。"),Button("前往自动安装",()=>Navigate("版本下载"),true)));
+ }
+ // 0.8.8：单实例横向卡片——心形置顶 + 设置（跳该实例实例设置）+ 删除。
+ UIElement InstanceCard(Instance item) {
+  var dock=new DockPanel{LastChildFill=true};
+  var heart=Button(item.Pinned?"♥":"♡",()=>{item.Pinned=!item.Pinned;store.Save();SelectPage("版本选择");});
+  heart.Width=34;heart.Height=34;heart.FontSize=20;heart.Margin=new Thickness(0,0,10,0);heart.BorderThickness=new Thickness(0);heart.Background=Brushes.Transparent;heart.Foreground=Brush(item.Pinned?"#E0314B":"#BBBBBB");heart.ToolTip="置顶实例";DockPanel.SetDock(heart,Dock.Left);dock.Children.Add(heart);
+  var actions=new StackPanel{Orientation=Orientation.Horizontal,VerticalAlignment=VerticalAlignment.Center};
+  var settings=Button("⚙",()=>{current=item;channelCatalog=null;store.Settings.Selected=item.Id;store.Save();gateway=null;plugins=[];skills=[];channels=[];checkedAt=null;instancePicker.Items.Refresh();instancePicker.SelectedItem=item;SelectPage("实例设置");});settings.Width=34;settings.Height=34;settings.FontSize=16;settings.Margin=new Thickness(0,0,6,0);settings.ToolTip="设置（进入该实例的独立设置）";
+  var del=Button("✕",()=>{
+   if(owned.TryGetValue(item.Id,out var p)&&!p.HasExited){Error(new Exception("请先停止该实例的网关，再删除。"));return;}
+   if(!Confirm("确定删除实例「"+item.Name+"」？\n"+(item.Managed?"其独立状态目录也会被一并删除。":"该实例为已有安装，仅从列表移除。")))return;
+   var wasCurrent=current.Id==item.Id;store.Delete(item);
+   if(wasCurrent&&store.Settings.Instances.Count>0)current=store.Settings.Instances[0];
+   instancePicker.Items.Refresh();instancePicker.SelectedItem=current;gateway=null;plugins=[];skills=[];channels=[];checkedAt=null;SelectPage("版本选择");AddLog("已删除实例 "+item.Name);
+  });del.Width=34;del.Height=34;del.FontSize=15;del.ToolTip="删除实例";del.Foreground=Brush("#D9363E");
+  actions.Children.Add(settings);actions.Children.Add(del);DockPanel.SetDock(actions,Dock.Right);dock.Children.Add(actions);
+  var info=new StackPanel{VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(4,0,8,0)};
+  info.Children.Add(Text(item.Name,14,item.Pinned?"#C8323C":"#333333"));info.Children.Add(Text(item.Version+"  ·  "+(item.Managed?"独立实例":"已有安装"),11,"#999999"));
+  dock.Children.Add(info);
+  return Card("",dock);
+ }
+ UIElement NewInstanceCard() {
+  var stack=new StackPanel{VerticalAlignment=VerticalAlignment.Center,Cursor=Cursors.Hand};stack.Children.Add(Text("＋ 新建实例",14,"#1E6FE8"));stack.Children.Add(Text("创建独立配置与工作目录",11,"#999999"));
+  stack.MouseLeftButtonDown+=(_,_)=>OpenCreateInstanceDialog();
+  return Card("",stack);
+ }
+ void OpenCreateInstanceDialog() {
+  var dialog=new Window{Owner=this,Title="新建 OpenClaw 实例",Width=560,Height=320,WindowStartupLocation=WindowStartupLocation.CenterOwner,ResizeMode=ResizeMode.NoResize};
+  var dock=new DockPanel{Margin=new Thickness(20)};
+  var ok=Button("创建实例",()=>dialog.DialogResult=true,true);DockPanel.SetDock(ok,Dock.Bottom);dock.Children.Add(ok);
+  var stack=new StackPanel();
   var name=Input("新的 OpenClaw 实例",280);var port=Input((store.Settings.Instances.Max(i=>i.Port)+1).ToString(),100);
-  body.Children.Add(Card("创建独立实例",Text("为新实例创建独立配置、工作目录和随机网关令牌；不会复制聊天记录与账号密钥。"),Row(name,port),AsyncButton("创建实例",async()=>{
-   if(!int.TryParse(port.Text,out var number))throw new Exception("端口必须是数字。");if(!File.Exists(Path.Combine(runtime.Text,"openclaw.mjs")))throw new Exception("请先选择有效的版本目录。");
-   var added=store.Create(name.Text,runtime.Text,number,store.Settings.DefaultPlugins);current=added;channelCatalog=null;instancePicker.Items.Refresh();instancePicker.SelectedItem=added;gateway=null;plugins=[];skills=[];channels=[];checkedAt=null;SelectPage(page);AddLog(store.Settings.DefaultPlugins.Count>0?"已按默认插件集创建实例（"+store.Settings.DefaultPlugins.Count+" 项）。":"已创建实例；默认插件集为空，未携带任何插件。");await Task.CompletedTask;
-  })));
+  var runtime=Input(current.Runtime,540);
+  var known=store.Settings.Instances.Select(i=>i.Runtime).ToList();var versionsFolder=Path.Combine(store.Root,"versions");
+  if(Directory.Exists(versionsFolder))known.AddRange(Directory.GetDirectories(versionsFolder).Where(d=>!Path.GetFileName(d).StartsWith(".")&&File.Exists(Path.Combine(d,"ocl-install.json"))).Select(d=>Path.Combine(d,"node_modules","openclaw")).Where(d=>File.Exists(Path.Combine(d,"openclaw.mjs"))));
+  var library=new ComboBox{Width=540,HorizontalAlignment=HorizontalAlignment.Left,ItemsSource=known.Distinct(StringComparer.OrdinalIgnoreCase).ToList(),SelectedItem=current.Runtime};
+  library.SelectionChanged+=(_,_)=>{if(library.SelectedItem is string path)runtime.Text=path;};
+  stack.Children.Add(Text("实例名称",12));stack.Children.Add(name);
+  stack.Children.Add(Text("网关端口（1024–65535，自动避开已用端口）",12));stack.Children.Add(port);
+  stack.Children.Add(Text("OpenClaw 版本目录",12));stack.Children.Add(library);stack.Children.Add(runtime);
+  dock.Children.Add(stack);dialog.Content=dock;
+  if(dialog.ShowDialog()!=true)return;
+  if(!int.TryParse(port.Text,out var number))throw new Exception("端口必须是数字。");
+  if(!File.Exists(Path.Combine(runtime.Text,"openclaw.mjs")))throw new Exception("请先选择有效的版本目录。");
+  var added=store.Create(name.Text,runtime.Text,number,store.Settings.DefaultPlugins);current=added;channelCatalog=null;instancePicker.Items.Refresh();instancePicker.SelectedItem=added;gateway=null;plugins=[];skills=[];channels=[];checkedAt=null;SelectPage("版本选择");AddLog(store.Settings.DefaultPlugins.Count>0?"已按默认插件集创建实例（"+store.Settings.DefaultPlugins.Count+" 项）。":"已创建实例；默认插件集为空，未携带任何插件。");
  }
  DataGrid Table(List<ItemRow> rows,bool account=false) {
   activeRows=rows;filter=Input("",360);filter.ToolTip="按名称、状态或说明筛选";filter.TextChanged+=(_,_)=>{if(activeGrid!=null)activeGrid.ItemsSource=activeRows.Where(r=>(r.Name+" "+r.State+" "+r.Detail).Contains(filter.Text,StringComparison.OrdinalIgnoreCase)).ToList();};

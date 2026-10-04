@@ -18,7 +18,7 @@ public sealed partial class MainWindow
  readonly TextBlock musicBadge=new();
  ColumnDefinition sidebarColumn=new();
  Border contentPane=new();
- string GroupFor(string value)=>value switch {"版本下载" or "版本与实例" or "插件市场"=>"下载","软件连接"=>"连接","实例设置" or "运行环境" or "导入实例设置" or "插件管理" or "Skills 管理" or "整合包"=>"实例设置","个性化" or "背景音乐" or "快捷方式图标"=>"设置","关于" or "操作日志"=>"关于",_=>"启动"};
+ string GroupFor(string value)=>value switch {"版本下载" or "版本选择" or "插件市场"=>"下载","软件连接"=>"连接","实例设置" or "运行环境" or "导入实例设置" or "插件管理" or "Skills 管理" or "整合包"=>"实例设置","个性化" or "背景音乐" or "快捷方式图标"=>"设置","关于" or "操作日志"=>"关于",_=>"启动"};
  // 页面自身可能在 SelectPage 里已经起了刷新（如实例设置页空列表自动加载），此时不再叠加一次。
  void Navigate(string destination) {refreshCancellation?.Cancel();SelectPage(destination);if(!busy&&refreshCancellation==null&&(!refreshTimes.TryGetValue(current.Id+destination,out var time)||DateTime.Now-time>TimeSpan.FromSeconds(60)))_ = Refresh();}
  void BuildShell() {
@@ -76,7 +76,7 @@ public sealed partial class MainWindow
   var currentBox=new StackPanel{Margin=new Thickness(12)};currentBox.Children.Add(Text("当前实例",11,"#999999"));instancePicker.Width=152;instancePicker.Margin=new Thickness(0);currentBox.Children.Add(instancePicker);DockPanel.SetDock(currentBox,Dock.Bottom);dock.Children.Add(currentBox);
   var menu=new StackPanel{Margin=new Thickness(0,12,0,0)};dock.Children.Add(menu);
   var entries=GroupFor(page) switch {
-   "下载"=>new[]{("自动安装","版本下载","⬡"),("本地实例","版本与实例","▣"),("插件市场","插件市场","✚")},
+   "下载"=>new[]{("自动安装","版本下载","⬡"),("版本选择","版本选择","▣"),("插件市场","插件市场","✚")},
    "连接"=>new[]{("软件连接","软件连接","◎")},
    // 0.8.6：实例设置提供「概览 / 运行环境 / 导入实例设置」以及每实例一份的插件、Skill、整合包，并在之后显示「返回启动总览」。
    "实例设置"=>new[]{("概览","实例设置","▣"),("运行环境","运行环境","⚙"),("导入实例设置","导入实例设置","⇩"),("插件","插件管理","◇"),("Skill","Skills 管理","✧"),("整合包","整合包","▤")},
@@ -100,7 +100,7 @@ public sealed partial class MainWindow
   middle.Children.Add(BrandPair(68,20));var caption=Text(current.Name,15,"#555555");caption.TextAlignment=TextAlignment.Center;middle.Children.Add(caption);var sub=Text("OpenClaw "+current.Version,11,"#999999");sub.TextAlignment=TextAlignment.Center;middle.Children.Add(sub);
   instancePicker.Width=260;instancePicker.Margin=new Thickness(0,5,0,8);middle.Children.Add(instancePicker);gatewayBadge.Text=ReadModel.B(gateway?["rpc"],"ok")==true?"●  网关可达":"○  "+(gateway==null?"尚未检查":"网关未就绪");gatewayBadge.FontSize=11;gatewayBadge.Foreground=Brush(GatewayColor);gatewayBadge.HorizontalAlignment=HorizontalAlignment.Center;gatewayBadge.Margin=new Thickness(0,7,0,0);middle.Children.Add(gatewayBadge);
   var launch=AsyncButton("",StartGateway,true);launch.Height=54;launch.Margin=new Thickness(0);launch.Padding=new Thickness(0);var label=new StackPanel();label.Children.Add(new TextBlock{Text="启动 OpenClaw",FontSize=17,HorizontalAlignment=HorizontalAlignment.Center});label.Children.Add(new TextBlock{Text=current.Version+"  ·  "+(current.Managed?"独立实例":"已有安装"),FontSize=11,Foreground=Brush("#888888"),HorizontalAlignment=HorizontalAlignment.Center,Margin=new Thickness(0,3,0,0)});launch.Content=label;Grid.SetRow(launch,2);grid.Children.Add(launch);
-  var buttons=new Grid{Margin=new Thickness(0,10,0,0)};buttons.ColumnDefinitions.Add(new(){Width=new GridLength(1,GridUnitType.Star)});buttons.ColumnDefinitions.Add(new(){Width=new GridLength(1,GridUnitType.Star)});var select=Button("版本选择",()=>Navigate("版本与实例"));select.Height=35;select.Margin=new Thickness(0,0,5,0);buttons.Children.Add(select);var settings=Button("实例设置",()=>Navigate("实例设置"));settings.Height=35;settings.Margin=new Thickness(5,0,0,0);Grid.SetColumn(settings,1);buttons.Children.Add(settings);Grid.SetRow(buttons,3);grid.Children.Add(buttons);
+  var buttons=new Grid{Margin=new Thickness(0,10,0,0)};buttons.ColumnDefinitions.Add(new(){Width=new GridLength(1,GridUnitType.Star)});buttons.ColumnDefinitions.Add(new(){Width=new GridLength(1,GridUnitType.Star)});var select=Button("版本选择",()=>Navigate("版本选择"));select.Height=35;select.Margin=new Thickness(0,0,5,0);buttons.Children.Add(select);var settings=Button("实例设置",()=>Navigate("实例设置"));settings.Height=35;settings.Margin=new Thickness(5,0,0,0);Grid.SetColumn(settings,1);buttons.Children.Add(settings);Grid.SetRow(buttons,3);grid.Children.Add(buttons);
  }
  UIElement Card(string title,params UIElement[] contents) {
   // PCL MyCard: 5px corners, 3px shadow, 13px title, 15px inset; Minecraft virtualization removed.
@@ -134,12 +134,6 @@ public sealed partial class MainWindow
   // 0.8.7：运行环境体检。这两项不会自己好，而且都直接表现为「启动慢 / 起不来」。
   body.Children.Add(Card("运行环境",Text("官方发布产物里必须带 dist/build-info.json，OpenClaw 靠它判断启动迁移是否已经跑过；缺了就会每次启动重跑一遍（实测多花约 50 秒）。启动迁移租约被强杀的上一次启动占住时，之后每次启动都会直接失败——两件事这里都能一键修。",11,"#888888"),Text(RuntimeDoctor.Summary(current),12),Row(AsyncButton("体检并修复",RepairRuntime),Button("打开状态目录",()=>{try{var dir=RuntimeDoctor.StateDirectory(current);Directory.CreateDirectory(dir);Process.Start(new ProcessStartInfo(dir){UseShellExecute=true});}catch(Exception e){Error(e);}}))));
   body.Children.Add(Card("启动器",Text("OCL "+Brand.Version+"  ·  PCL 风格 OpenClaw 独立启动器",12),Text("PCL 原作者：龙腾猫跃。本程序为第三方独立二次创作。",11,"#999999")));
- }
- UIElement InstanceList() {
-  // 0.8.3：这里不再放「设置」按钮——实例设置的唯一入口是启动页侧栏。
-  var stack=new StackPanel();foreach(var item in store.Settings.Instances.ToList()) {var dock=new DockPanel{Margin=new Thickness(0,0,0,8)};
-   var choose=Button(item==current?"当前实例":"选择",()=>{instancePicker.SelectedItem=item;});DockPanel.SetDock(choose,Dock.Right);dock.Children.Add(choose);
-   var labels=new StackPanel();labels.Children.Add(Text(item.Name,13,"#444444"));labels.Children.Add(Text(item.Version+"  ·  "+(item.Managed?"独立配置":"已有配置"),11,"#999999"));dock.Children.Add(labels);stack.Children.Add(dock);}return stack;
  }
  void AnimateContent() {if(screenshot||!store.Settings.Appearance.Animations)return;body.BeginAnimation(OpacityProperty,new DoubleAnimation(0,1,TimeSpan.FromMilliseconds(170)));var move=new TranslateTransform();body.RenderTransform=move;move.BeginAnimation(TranslateTransform.YProperty,new DoubleAnimation(8,0,TimeSpan.FromMilliseconds(210)){EasingFunction=new QuadraticEase{EasingMode=EasingMode.EaseOut}});}
  UIElement BrandPair(double size,double gap) {

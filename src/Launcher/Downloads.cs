@@ -47,7 +47,7 @@ public sealed partial class MainWindow
   var progress=new Progress<InstallProgress>(p=>{stage.Text=p.Stage;bar.IsIndeterminate=p.Percent>=15&&p.Percent<88;bar.Value=p.Percent;if(p.Line.Length>0){lines.AppendText(p.Line+Environment.NewLine);if(lines.Text.Length>20000)lines.Text=lines.Text[^16000..];lines.ScrollToEnd();AddLog(p.Line);}});
   try{
    var runtime=await RuntimeInstall.Install(store,runner,release.Version,cancellation?.Token??default,progress,release);
-   cancellation?.Token.ThrowIfCancellationRequested();var added=store.Create(name.Text.Trim(),runtime,number);current=added;instancePicker.Items.Refresh();instancePicker.SelectedItem=added;gateway=null;plugins=[];skills=[];channels=[];checkedAt=null;AddLog("安装完成："+release.Version+"；已创建独立实例 "+added.Name);SelectPage("版本与实例");
+   cancellation?.Token.ThrowIfCancellationRequested();var added=store.Create(name.Text.Trim(),runtime,number);current=added;instancePicker.Items.Refresh();instancePicker.SelectedItem=added;gateway=null;plugins=[];skills=[];channels=[];checkedAt=null;AddLog("安装完成："+release.Version+"；已创建独立实例 "+added.Name);SelectPage("版本选择");
   }finally{finished=true;progressWindow.Close();}
  }
  int NextPort(){var used=store.Settings.Instances.Select(i=>i.Port).ToHashSet();for(int port=18789;port<65535;port++)if(!used.Contains(port))return port;throw new Exception("没有可用的实例端口。");}
