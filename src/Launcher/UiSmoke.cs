@@ -78,6 +78,28 @@ public sealed partial class MainWindow
   checks.Add("PASS instance-settings nav swaps in and restores the section nav");
   // 0.8.8：版本选择页必须渲染出每个实例的横向卡片（含置顶心形按钮）与「新建实例」卡片。
   CapturePage("版本选择");await Task.Delay(40);Capture("版本选择");
+  // 0.8.8 重做：照 PCL——版本选择独占顶端导航、OCL 侧栏让位、页面自带左栏。
+  if(topButtons["版本选择"].Visibility!=Visibility.Visible)throw new Exception("版本选择导航项未独占出现");
+  if(topButtons["启动"].Visibility!=Visibility.Collapsed)throw new Exception("版本选择模式下分区导航未让位");
+  if(topButtons["实例设置"].Visibility!=Visibility.Collapsed)throw new Exception("版本选择模式下实例设置导航未让位");
+  CapturePage("启动总览");
+  if(topButtons["版本选择"].Visibility!=Visibility.Collapsed)throw new Exception("离开版本选择后导航项未隐藏");
+  CapturePage("版本选择");await Task.Delay(40);
+  bool HasText(DependencyObject e,string needle){if(e is TextBlock t&&t.Text.Contains(needle))return true;if(e is System.Windows.Controls.Button b&&b.Content is string s&&s.Contains(needle))return true;foreach(var c in LogicalTreeHelper.GetChildren(e))if(c is DependencyObject d&&HasText(d,needle))return true;return false;}
+  if(!HasText(body,"实例列表"))throw new Exception("版本选择页左栏缺「实例列表」");
+  if(!HasText(body,"添加或导入"))throw new Exception("版本选择页左栏缺「添加或导入」");
+  if(!HasText(body,"← 返回启动总览"))throw new Exception("版本选择页缺左上角返回箭头按钮");
+  if(!HasText(body,"设置")||!HasText(body,"删除"))throw new Exception("版本选择页实例卡片缺「设置 / 删除」按钮");
+  checks.Add("PASS 版本选择页独占顶端导航 + PCL 式左栏（实例列表 / 添加或导入）+ 左上角返回箭头");
+  // 0.8.8：版本选择页最核心的动作是「切换版本」——点卡片（或左栏条目）必须真的把当前实例换掉。
+  var previous=current.Id;var other=store.Settings.Instances.FirstOrDefault(i=>i.Id!=previous);
+  if(other!=null) {
+   SwitchToInstance(other);
+   if(current.Id!=other.Id)throw new Exception("版本切换没有改变当前实例");
+   if(store.Settings.Selected!=other.Id)throw new Exception("版本切换没有落盘到设置");
+   checks.Add("PASS 版本选择页·版本切换：当前实例切到「"+current.Name+"」并已落盘");
+   current=store.Settings.Instances.First(i=>i.Id==previous);store.Settings.Selected=previous;store.Save();SelectPage("版本选择");
+  }
   int HeartCount(DependencyObject e){int n=0;if(e is Button b&&b.Content is string s&&(s=="♥"||s=="♡"))n++;foreach(var c in LogicalTreeHelper.GetChildren(e))if(c is DependencyObject d)n+=HeartCount(d);return n;}
   var hearts=HeartCount(body);
   if(hearts<1)throw new Exception("版本选择页没有渲染出实例卡片（心形按钮数="+hearts+"）");

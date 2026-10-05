@@ -432,56 +432,125 @@ public sealed partial class MainWindow : Window
   }
   await Refresh();
  }
- // 0.8.8：版本选择独立成页（参照 PCL 版本选择页）——每个实例一张横向卡片，含置顶心形、设置、删除。
- // 设置按钮直接跳到该实例的「实例设置」页；删除会移除实例（独立实例同时删除状态目录）。
+ // 0.8.8 重做：版本选择独立页，版式照 PCL 版本选择页 1:1——
+ // 左栏「实例列表」（点选切换当前实例，名称+路径两行）与「添加或导入」（下载新版本 / 新建实例 / 导入整合包），
+ // 右侧每实例一行横向卡片：置顶心形、图标、名称与副标题、设置（直接跳该实例的实例设置）、删除。
+ // 进入本页时顶端导航只留「版本选择」、OCL 侧栏整列让位（Shell.UpdateNavigation 处理）。
  void VersionSelectionPage() {
   pageTitle.Text="版本选择";
-  pageNote.Text="选择要使用的 OpenClaw 实例；点击心形置顶，设置进入该实例的独立设置，删除会移除该实例（独立实例同时删除状态目录）。";
+  pageNote.Text="选择要使用的 OpenClaw 实例。♥ 置顶 · ⚙ 进入该实例的独立设置 · ✕ 删除。";
   var ordered=store.Settings.Instances.OrderByDescending(i=>i.Pinned).ThenBy(i=>store.Settings.Instances.IndexOf(i)).ToList();
-  var wrap=new WrapPanel{Margin=new Thickness(0,0,0,4)};
-  foreach(var item in ordered)wrap.Children.Add(InstanceCard(item));
-  wrap.Children.Add(NewInstanceCard());
-  body.Children.Add(Card("实例",wrap,Text("每个实例对应一份独立的 OpenClaw 版本与配置；心形置顶的实例排在最前。",11,"#999999")));
-  // 保留「切换当前实例版本目录」能力（不丢功能）。
+  // PCL 版本选择页左上角的返回箭头：本页侧栏已整列让位，这是回「启动总览」的唯一入口，必须有。
+  var back=Button("← 返回启动总览",()=>Navigate("启动总览"));
+  back.BorderThickness=new Thickness(0);back.Background=Brushes.Transparent;back.Foreground=Brush("#C8323C");
+  back.FontWeight=FontWeights.Bold;back.Padding=new Thickness(0);back.HorizontalAlignment=HorizontalAlignment.Left;back.Margin=new Thickness(0,0,0,10);
+  body.Children.Add(back);
+  var columns=new Grid{Margin=new Thickness(0,0,0,4)};
+  columns.ColumnDefinitions.Add(new(){Width=new GridLength(298)});
+  columns.ColumnDefinitions.Add(new(){Width=new GridLength(16)});
+  columns.ColumnDefinitions.Add(new(){Width=new GridLength(1,GridUnitType.Star)});
+  // ── 左栏（PCL「文件夹列表」区）：白底圆角面板 ──
+  var side=new StackPanel();
+  var sideTitle=Text("实例列表",14,"#333333");sideTitle.FontWeight=FontWeights.Bold;sideTitle.Margin=new Thickness(0,0,0,6);side.Children.Add(sideTitle);
+  foreach(var item in ordered)side.Children.Add(SideInstanceItem(item));
+  side.Children.Add(Spacer(10));
+  var addTitle=Text("添加或导入",14,"#333333");addTitle.FontWeight=FontWeights.Bold;addTitle.Margin=new Thickness(0,0,0,6);side.Children.Add(addTitle);
+  side.Children.Add(SideAction("⬡","下载新版本","从官方完整版本列表自动安装",()=>Navigate("版本下载")));
+  side.Children.Add(SideAction("＋","新建实例","创建独立配置与工作目录",OpenCreateInstanceDialog));
+  side.Children.Add(SideAction("▤","导入整合包","从整合包创建实例",()=>Navigate("整合包")));
+  var sideHost=new Border{CornerRadius=new CornerRadius(5),Padding=new Thickness(16,13,16,13),Child=side};
+  sideHost.SetResourceReference(Border.BackgroundProperty,"CardBrush");
+  Grid.SetColumn(sideHost,0);columns.Children.Add(sideHost);
+  // ── 右列：实例横向卡片 + 版本目录 ──
+  var rightStack=new StackPanel();Grid.SetColumn(rightStack,2);columns.Children.Add(rightStack);
+  var list=new StackPanel();
+  foreach(var item in ordered)list.Children.Add(InstanceCard(item));
+  list.Children.Add(NewInstanceCard());
+  rightStack.Children.Add(Card("实例 ("+ordered.Count+")",list,Text("置顶的实例排在最前；设置直接进入该实例的独立设置页。",11,"#999999")));
+  rightStack.Children.Add(RuntimeDirectoryCard());
+  body.Children.Add(columns);
+ }
+ UIElement Spacer(double height)=>new Border{Height=height};
+ // 左栏单条实例：名称（选中=强调色）+ 路径（灰），点击切换当前实例。
+ UIElement SideInstanceItem(Instance item) {
+  var stack=new StackPanel{Margin=new Thickness(0,7,0,7),Cursor=Cursors.Hand};
+  var name=Text(item.Name,13,item==current?"#1E6FE8":"#333333");name.FontWeight=FontWeights.Bold;stack.Children.Add(name);
+  stack.Children.Add(Text(item.Runtime+Path.DirectorySeparatorChar,11,"#999999"));
+  stack.MouseLeftButtonDown+=(_,_)=>SwitchToInstance(item);
+  return stack;
+ }
+ // 左栏「添加或导入」的一行：图标 + 名称 + 说明，整行可点。
+ UIElement SideAction(string glyph,string label,string note,Action click) {
+  var row=new StackPanel{Orientation=Orientation.Horizontal,Margin=new Thickness(0,8,0,8),Cursor=Cursors.Hand};
+  row.Children.Add(new TextBlock{Text=glyph,FontSize=18,Margin=new Thickness(0,0,11,0),VerticalAlignment=VerticalAlignment.Center});
+  var col=new StackPanel{VerticalAlignment=VerticalAlignment.Center};col.Children.Add(Text(label,13,"#333333"));col.Children.Add(Text(note,11,"#999999"));
+  row.Children.Add(col);
+  row.MouseLeftButtonDown+=(_,_)=>click();
+  return row;
+ }
+ void SwitchToInstance(Instance item) {
+  if(item==current)return;
+  current=item;channelCatalog=null;store.Settings.Selected=item.Id;store.Save();
+  gateway=null;plugins=[];skills=[];channels=[];checkedAt=null;
+  instancePicker.Items.Refresh();instancePicker.SelectedItem=item;
+  SelectPage("版本选择");if(!busy)_ = Refresh();
+ }
+ // 0.8.8：保留「切换当前实例版本目录」能力（不丢功能），从三张卡压缩成一张。
+ UIElement RuntimeDirectoryCard() {
   var runtime=Input(current.Runtime,540);
   var known=store.Settings.Instances.Select(i=>i.Runtime).ToList();var versionsFolder=Path.Combine(store.Root,"versions");
   if(Directory.Exists(versionsFolder))known.AddRange(Directory.GetDirectories(versionsFolder).Where(d=>!Path.GetFileName(d).StartsWith(".")&&File.Exists(Path.Combine(d,"ocl-install.json"))).Select(d=>Path.Combine(d,"node_modules","openclaw")).Where(d=>File.Exists(Path.Combine(d,"openclaw.mjs"))));
   var library=new ComboBox{Width=540,HorizontalAlignment=HorizontalAlignment.Left,ItemsSource=known.Distinct(StringComparer.OrdinalIgnoreCase).ToList(),SelectedItem=current.Runtime};
   library.SelectionChanged+=(_,_)=>{if(library.SelectedItem is string path)runtime.Text=path;};
-  body.Children.Add(Card("当前实例版本目录",library,Text("选择已登记的版本后，在下方应用；新下载的版本会保存在本机版本库。")));
-  body.Children.Add(Card("切换当前实例到所选目录",runtime,Row(Button("浏览目录",()=>{var dialog=new OpenFolderDialog();if(dialog.ShowDialog(this)==true)runtime.Text=dialog.FolderName;}),AsyncButton("应用到当前实例",async()=>{
+  return Card("当前实例版本目录",library,Text("选择已登记的版本后应用；新下载的版本会保存在本机版本库。"),Row(Button("浏览目录",()=>{var dialog=new OpenFolderDialog();if(dialog.ShowDialog(this)==true)runtime.Text=dialog.FolderName;}),AsyncButton("应用到当前实例",async()=>{
    if(owned.TryGetValue(current.Id,out var process)&&!process.HasExited)throw new Exception("请先停止当前网关，再切换版本。");
    if(!File.Exists(Path.Combine(runtime.Text,"openclaw.mjs")))throw new Exception("该目录没有 openclaw.mjs。");
    var check=await Json("gateway","status","--json");if(ReadModel.B(check?["rpc"],"ok")==true)throw new Exception("请先停止当前网关，再切换版本。");
    if(!Confirm("将当前实例切换到：\n"+runtime.Text+"\n旧版本可能不兼容现有数据，建议用新实例测试。"))return;
    current.Runtime=Path.GetFullPath(runtime.Text);store.Save();SelectPage(page);
-  }))));
-  body.Children.Add(Card("下载版本",Text("从完整版本列表选择正式版、预览版或历史版本，自动下载并创建实例。"),Button("前往自动安装",()=>Navigate("版本下载"),true)));
+  })));
  }
- // 0.8.8：单实例横向卡片——心形置顶 + 设置（跳该实例实例设置）+ 删除。
+ // 0.8.8：单实例横向卡片（照 PCL 版本列表行）——心形置顶 | 图标 | 名称+副标题 | 设置 | 删除。
+ // 按钮一律用可读的文字（心形指定 Segoe UI Symbol 保证字形）——之前 ⚙/✕ 在默认字体下
+ // 渲染成两个像箭头的怪符号，被主人点名「应付公事的无效箭头按钮」，别再犯。
  UIElement InstanceCard(Instance item) {
   var dock=new DockPanel{LastChildFill=true};
   var heart=Button(item.Pinned?"♥":"♡",()=>{item.Pinned=!item.Pinned;store.Save();SelectPage("版本选择");});
-  heart.Width=34;heart.Height=34;heart.FontSize=20;heart.Margin=new Thickness(0,0,10,0);heart.BorderThickness=new Thickness(0);heart.Background=Brushes.Transparent;heart.Foreground=Brush(item.Pinned?"#E0314B":"#BBBBBB");heart.ToolTip="置顶实例";DockPanel.SetDock(heart,Dock.Left);dock.Children.Add(heart);
+  heart.Width=36;heart.Height=34;heart.FontSize=19;heart.FontFamily=new FontFamily("Segoe UI Symbol");heart.Margin=new Thickness(0,0,10,0);heart.BorderThickness=new Thickness(0);heart.Background=Brushes.Transparent;heart.Foreground=Brush(item.Pinned?"#E0314B":"#BBBBBB");heart.Padding=new Thickness(0);heart.ToolTip=item.Pinned?"取消置顶":"置顶实例";DockPanel.SetDock(heart,Dock.Left);dock.Children.Add(heart);
   var actions=new StackPanel{Orientation=Orientation.Horizontal,VerticalAlignment=VerticalAlignment.Center};
-  var settings=Button("⚙",()=>{current=item;channelCatalog=null;store.Settings.Selected=item.Id;store.Save();gateway=null;plugins=[];skills=[];channels=[];checkedAt=null;instancePicker.Items.Refresh();instancePicker.SelectedItem=item;SelectPage("实例设置");});settings.Width=34;settings.Height=34;settings.FontSize=16;settings.Margin=new Thickness(0,0,6,0);settings.ToolTip="设置（进入该实例的独立设置）";
-  var del=Button("✕",()=>{
+  var settings=Button("设置",()=>{SwitchToInstance(item);SelectPage("实例设置");});settings.MinWidth=52;settings.Height=30;settings.Padding=new Thickness(10,2,10,2);settings.Margin=new Thickness(0,0,8,0);settings.ToolTip="进入该实例的独立设置";
+  var del=Button("删除",()=>{
    if(owned.TryGetValue(item.Id,out var p)&&!p.HasExited){Error(new Exception("请先停止该实例的网关，再删除。"));return;}
    if(!Confirm("确定删除实例「"+item.Name+"」？\n"+(item.Managed?"其独立状态目录也会被一并删除。":"该实例为已有安装，仅从列表移除。")))return;
    var wasCurrent=current.Id==item.Id;store.Delete(item);
    if(wasCurrent&&store.Settings.Instances.Count>0)current=store.Settings.Instances[0];
    instancePicker.Items.Refresh();instancePicker.SelectedItem=current;gateway=null;plugins=[];skills=[];channels=[];checkedAt=null;SelectPage("版本选择");AddLog("已删除实例 "+item.Name);
-  });del.Width=34;del.Height=34;del.FontSize=15;del.ToolTip="删除实例";del.Foreground=Brush("#D9363E");
+  });del.MinWidth=52;del.Height=30;del.Padding=new Thickness(10,2,10,2);del.ToolTip="删除实例";del.Foreground=Brush("#D9363E");del.BorderBrush=Brush("#D9363E");
   actions.Children.Add(settings);actions.Children.Add(del);DockPanel.SetDock(actions,Dock.Right);dock.Children.Add(actions);
+  var icon=new Image{Source=Brand.Image(),Width=36,Height=36,Stretch=Stretch.Fill,Margin=new Thickness(4,0,12,0),VerticalAlignment=VerticalAlignment.Center};DockPanel.SetDock(icon,Dock.Left);dock.Children.Add(icon);
   var info=new StackPanel{VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(4,0,8,0)};
-  info.Children.Add(Text(item.Name,14,item.Pinned?"#C8323C":"#333333"));info.Children.Add(Text(item.Version+"  ·  "+(item.Managed?"独立实例":"已有安装"),11,"#999999"));
+  var heading=new StackPanel{Orientation=Orientation.Horizontal};
+  var name=Text(item.Name,14,item==current?"#C8323C":"#333333");name.FontWeight=FontWeights.Bold;heading.Children.Add(name);
+  if(item==current){var badge=Text("当前",11,"#FFFFFF");badge.Background=Brush("#C8323C");badge.Padding=new Thickness(6,1,6,1);badge.Margin=new Thickness(9,0,0,0);badge.VerticalAlignment=VerticalAlignment.Center;heading.Children.Add(badge);}
+  info.Children.Add(heading);
+  info.Children.Add(Text("OpenClaw "+item.Version+"  ·  端口 "+item.Port+"  ·  "+(item.Managed?"独立实例":"已有安装"),11,"#999999"));
   dock.Children.Add(info);
-  return Card("",dock);
+  // 0.8.8：版本选择页最核心的动作就是「切换版本」——点整张卡片即切到该实例。
+  // 心形 / 设置 / 删除各有独立动作，用 Preview 把按下事件吃掉，免得冒泡上来顺带触发切换。
+  dock.Cursor=Cursors.Hand;
+  dock.MouseLeftButtonDown+=(_,_)=>{if(item==current){status.Text="当前已经是「"+item.Name+"」。";return;}SwitchToInstance(item);status.Text="已切换到实例「"+item.Name+"」。";AddLog("已切换当前实例为 "+item.Name+"（"+item.Version+"）。");};
+  foreach(var b in new[]{heart,settings,del})b.PreviewMouseLeftButtonDown+=(_,e)=>e.Handled=true;
+  var card=Card("",dock);
+  if(item==current)dock.Background=(System.Windows.Media.Brush)FindResource("AccentSoft");
+  return card;
  }
  UIElement NewInstanceCard() {
-  var stack=new StackPanel{VerticalAlignment=VerticalAlignment.Center,Cursor=Cursors.Hand};stack.Children.Add(Text("＋ 新建实例",14,"#1E6FE8"));stack.Children.Add(Text("创建独立配置与工作目录",11,"#999999"));
-  stack.MouseLeftButtonDown+=(_,_)=>OpenCreateInstanceDialog();
-  return Card("",stack);
+  var row=new StackPanel{Orientation=Orientation.Horizontal,VerticalAlignment=VerticalAlignment.Center,Cursor=Cursors.Hand};
+  row.Children.Add(new TextBlock{Text="＋",FontSize=20,Margin=new Thickness(4,0,12,0),VerticalAlignment=VerticalAlignment.Center});
+  var col=new StackPanel{VerticalAlignment=VerticalAlignment.Center};col.Children.Add(Text("新建实例",14,"#1E6FE8"));col.Children.Add(Text("创建独立配置与工作目录",11,"#999999"));
+  row.Children.Add(col);
+  row.MouseLeftButtonDown+=(_,_)=>OpenCreateInstanceDialog();
+  return Card("",row);
  }
  void OpenCreateInstanceDialog() {
   var dialog=new Window{Owner=this,Title="新建 OpenClaw 实例",Width=560,Height=320,WindowStartupLocation=WindowStartupLocation.CenterOwner,ResizeMode=ResizeMode.NoResize};

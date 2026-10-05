@@ -15,6 +15,8 @@ public sealed partial class MainWindow
  readonly Dictionary<string,Button> topButtons=new();
  // 0.8.6：实例设置专属导航项，只在实例设置里显示。
  Button? instanceButton;
+ // 0.8.8：版本选择也照实例设置的做法独占顶端导航——进入后其它分区全部让位。
+ Button? versionButton;
  readonly TextBlock musicBadge=new();
  ColumnDefinition sidebarColumn=new();
  Border contentPane=new();
@@ -43,6 +45,9 @@ public sealed partial class MainWindow
   // 进入实例设置后顶端只保留它，返回启动总览或切到其他分区即自动隐藏。
   instanceButton=Button("",()=>Navigate("实例设置"));instanceButton.Style=(Style)FindResource("TitleButton");
   var instanceRow=new StackPanel{Orientation=Orientation.Horizontal};instanceRow.Children.Add(new TextBlock{Text="⬡",FontSize=15,Foreground=Brushes.White,VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(0,0,7,0)});instanceRow.Children.Add(new TextBlock{Text="实例设置",Foreground=Brushes.White,VerticalAlignment=VerticalAlignment.Center});instanceButton.Content=instanceRow;instanceButton.Visibility=Visibility.Collapsed;topButtons["实例设置"]=instanceButton;tabs.Children.Add(instanceButton);
+  // 0.8.8：版本选择与实例设置同级——进入后顶端只保留「版本选择」一项（主人要求照 PCL：独立页面）。
+  versionButton=Button("",()=>Navigate("版本选择"));versionButton.Style=(Style)FindResource("TitleButton");
+  var versionRow=new StackPanel{Orientation=Orientation.Horizontal};versionRow.Children.Add(new TextBlock{Text="▣",FontSize=14,Foreground=Brushes.White,VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(0,0,7,0)});versionRow.Children.Add(new TextBlock{Text="版本选择",Foreground=Brushes.White,VerticalAlignment=VerticalAlignment.Center});versionButton.Content=versionRow;versionButton.Visibility=Visibility.Collapsed;topButtons["版本选择"]=versionButton;tabs.Children.Add(versionButton);
   var windowButtons=new StackPanel{Orientation=Orientation.Horizontal,HorizontalAlignment=HorizontalAlignment.Right,VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(0,0,9,0)};Grid.SetColumn(windowButtons,2);titleContent.Children.Add(windowButtons);
   foreach(var (glyph,action,hint) in new (string,Action,string)[]{("─",()=>WindowState=WindowState.Minimized,"最小化"),("□",()=>WindowState=WindowState==WindowState.Maximized?WindowState.Normal:WindowState.Maximized,"最大化 / 还原"),("×",Close,"关闭")}) {
    var b=Button(glyph,action);b.Style=(Style)FindResource("TitleButton");b.Width=27;b.Height=28;b.MinHeight=0;b.Margin=new Thickness(2,0,2,0);b.Padding=new Thickness(0);b.FontSize=20;b.ToolTip=hint;windowButtons.Children.Add(b);
@@ -65,17 +70,22 @@ public sealed partial class MainWindow
  }
  void UpdateNavigation() {
   // 实例设置模式：顶端 5 个分区导航让位给「实例设置」一项；退出即还原。
+  // 0.8.8：版本选择同样独占顶端导航（照 PCL 的独立版本选择页）。
   var inInstance=GroupFor(page)=="实例设置";
+  var inVersion=page=="版本选择";
   foreach(var (group,b) in topButtons) {
    if(group=="实例设置"){b.Visibility=inInstance?Visibility.Visible:Visibility.Collapsed;b.Background=inInstance?Brush("#35FFFFFF"):Brushes.Transparent;continue;}
-   b.Visibility=inInstance?Visibility.Collapsed:Visibility.Visible;
-   b.Background=group==GroupFor(page)?Brush("#35FFFFFF"):Brushes.Transparent;
+   if(group=="版本选择"){b.Visibility=inVersion?Visibility.Visible:Visibility.Collapsed;b.Background=inVersion?Brush("#35FFFFFF"):Brushes.Transparent;continue;}
+   b.Visibility=inInstance||inVersion?Visibility.Collapsed:Visibility.Visible;
+   b.Background=!inInstance&&!inVersion&&group==GroupFor(page)?Brush("#35FFFFFF"):Brushes.Transparent;
   }
-  sidebarColumn.Width=new GridLength(page=="启动总览"?300:176);
+  // 版本选择页自带 PCL 式左栏（实例列表 + 添加或导入），OCL 自己的侧栏整列让位。
+  sidebarColumn.Width=new GridLength(page switch{"启动总览"=>300,"版本选择"=>0,_=>176});
   if(instancePicker.Parent is Panel old)old.Children.Remove(instancePicker);
   if(gatewayBadge.Parent is Panel prior)prior.Children.Remove(gatewayBadge);
   sidebarHost.Children.Clear();
   if(page=="启动总览"){LaunchSidebar();return;}
+  if(page=="版本选择")return;
   var dock=new DockPanel();sidebarHost.Children.Add(dock);
   var currentBox=new StackPanel{Margin=new Thickness(12)};currentBox.Children.Add(Text("当前实例",11,"#999999"));instancePicker.Width=152;instancePicker.Margin=new Thickness(0);currentBox.Children.Add(instancePicker);DockPanel.SetDock(currentBox,Dock.Bottom);dock.Children.Add(currentBox);
   var menu=new StackPanel{Margin=new Thickness(0,12,0,0)};dock.Children.Add(menu);

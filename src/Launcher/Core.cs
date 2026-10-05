@@ -370,6 +370,11 @@ public sealed class Runner
  }
  public Process StartGateway(Instance instance,Action<string> output) {
   var info=StartInfo(instance,["gateway","run"]);
+  // 0.8.8 修订：网关是常驻进程，默认会把内存一路吃到 1GB 上下（本机实测 941MB 且只增不减）。
+  // 系统内存一紧张，浏览器里的控制台就会整页换页，所有操作都变卡——而网关本身其实很快
+  // （本机实测 /healthz 只要 4~6 毫秒）。这里给 V8 一个上限，逼它更积极地回收并把内存还给系统。
+  // 768MB 对网关足够（它真正活着的对象远小于此），设得太小反而会让网关因 OOM 退出。
+  info.Environment["NODE_OPTIONS"]="--max-old-space-size=768 --max-semi-space-size=16";
   var p=new Process {StartInfo=info,EnableRaisingEvents=true};
   p.OutputDataReceived+=(_,e)=> {if(e.Data!=null)output(SafeLog.Clean(e.Data));};
   p.ErrorDataReceived+=(_,e)=> {if(e.Data!=null)output(SafeLog.Clean(e.Data));};
