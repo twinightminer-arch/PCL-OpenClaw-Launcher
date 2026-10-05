@@ -35,18 +35,35 @@ public sealed partial class MainWindow
  // 拖动模糊滑块时仍是实时预览（便宜），松手再烘焙成静态并卸掉实时特效。
  void RenderWallpaper() {
   var a=store.Settings.Appearance;var path=a.BackgroundImage;
-  if(path==lastWallpaperPath&&Math.Abs(a.BackgroundBlur-lastWallpaperBlur)<0.01){wallpaper.Effect=null;return;}
-  lastWallpaperPath=path;lastWallpaperBlur=a.BackgroundBlur;wallpaper.Effect=null;
-  if(path.Length>0&&File.Exists(path)) {
-   try {
-    var bitmap=new BitmapImage();bitmap.BeginInit();bitmap.CacheOption=BitmapCacheOption.OnLoad;bitmap.DecodePixelWidth=1920;bitmap.UriSource=new Uri(Path.GetFullPath(path));bitmap.EndInit();bitmap.Freeze();
-    if(a.BackgroundBlur>0.5) {
-     var visual=new System.Windows.Media.DrawingVisual();using(var dc=visual.RenderOpen())dc.DrawImage(bitmap,new Rect(0,0,bitmap.PixelWidth,bitmap.PixelHeight));
-     visual.Effect=new System.Windows.Media.Effects.BlurEffect{Radius=a.BackgroundBlur};
-     var rtb=new RenderTargetBitmap(bitmap.PixelWidth,bitmap.PixelHeight,96,96,PixelFormats.Pbgra32);rtb.Render(visual);rtb.Freeze();wallpaper.Source=rtb;
-    } else wallpaper.Source=bitmap;
-   } catch(Exception e){wallpaper.Source=null;AddLog("背景图片无法读取："+e.Message);}
-  } else wallpaper.Source=null;
+  // 稳态绝不挂实时特效（实时 BlurEffect 是「整屏重绘就卡」的根因）。
+  wallpaper.Effect=null;
+  // 大图缩放按低质量合成，显著降低壁纸参与每帧合成的开销。
+  RenderOptions.SetBitmapScalingMode(wallpaper,BitmapScalingMode.LowQuality);
+  if(path.Length==0||!File.Exists(path)){wallpaper.Source=null;lastWallpaperPath="";lastWallpaperBlur=-1;return;}
+  var blur=Math.Clamp(a.BackgroundBlur,0,40);
+  if(path==lastWallpaperPath&&Math.Abs(blur-lastWallpaperBlur)<0.01&&wallpaper.Source!=null)return;
+  lastWallpaperPath=path;lastWallpaperBlur=blur;
+  BitmapSource? final=null;
+  try {
+   var bitmap=new BitmapImage();bitmap.BeginInit();bitmap.CacheOption=BitmapCacheOption.OnLoad;bitmap.DecodePixelWidth=1280;bitmap.UriSource=new Uri(Path.GetFullPath(path));bitmap.EndInit();bitmap.Freeze();
+   if(bitmap.PixelWidth>0&&bitmap.PixelHeight>0)final=bitmap;
+  } catch(Exception e){AddLog("背景图片无法读取："+e.Message);}
+  // 关键：模糊烘焙失败也绝不能让壁纸消失——回退到未模糊的原图。
+  // （上一版把烘焙异常直接 Source=null，结果壁纸整张不显示，这是本版修掉的回归。）
+  if(final!=null&&blur>0.5) {
+   try { var baked=BakeBlur(final,blur); if(baked!=null)final=baked; }
+   catch(Exception e){AddLog("背景模糊烘焙失败，已改用原图显示："+e.Message);}
+  }
+  wallpaper.Source=final;
+ }
+ // 用 Image 控件（UIElement）烘焙，比 DrawingVisual+Effect 稳；失败返回 null，由调用方回退原图。
+ static BitmapSource? BakeBlur(BitmapSource source,double radius) {
+  var image=new Image{Source=source,Stretch=Stretch.None,Effect=new System.Windows.Media.Effects.BlurEffect{Radius=radius}};
+  var size=new Size(source.PixelWidth,source.PixelHeight);
+  image.Measure(size);image.Arrange(new Rect(size));
+  var rtb=new RenderTargetBitmap(source.PixelWidth,source.PixelHeight,96,96,PixelFormats.Pbgra32);
+  rtb.Render(image);rtb.Freeze();
+  return rtb.PixelWidth>0&&rtb.PixelHeight>0?rtb:null;
  }
  // 0.8.8：模糊滑块拖动时实时预览（临时挂 BlurEffect），松手烘焙成静态并卸掉特效。
  UIElement BlurControl() {

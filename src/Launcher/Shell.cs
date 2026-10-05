@@ -57,7 +57,11 @@ public sealed partial class MainWindow
   contentPane=new Border{Child=new ScrollViewer{Content=body,VerticalScrollBarVisibility=ScrollBarVisibility.Auto,HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled,Padding=new Thickness(3,3,7,3)}};Grid.SetRow(contentPane,1);right.Children.Add(contentPane);
   var footer=new DockPanel();musicBadge.FontSize=11;musicBadge.MaxWidth=170;musicBadge.TextTrimming=TextTrimming.CharacterEllipsis;musicBadge.VerticalAlignment=VerticalAlignment.Center;musicBadge.Foreground=Brush("#777777");musicBadge.Cursor=Cursors.Hand;musicBadge.MouseLeftButtonDown+=(_,_)=>Navigate("背景音乐");DockPanel.SetDock(musicBadge,Dock.Right);footer.Children.Add(musicBadge);status.FontSize=10;status.Foreground=Brush("#999999");status.Text="OCL "+Brand.Version;status.Margin=new Thickness(0,4,5,0);status.TextTrimming=TextTrimming.CharacterEllipsis;footer.Children.Add(status);var footerHost=new Border{Background=new SolidColorBrush(Color.FromArgb(200,255,255,255)),CornerRadius=new CornerRadius(5),Padding=new Thickness(10,4,10,4),Margin=new Thickness(0,4,5,0),Child=footer};Grid.SetRow(footerHost,2);right.Children.Add(footerHost);Grid.SetColumn(right,1);workspace.Children.Add(right);
   splash.Visibility=Visibility.Collapsed;splash.Background=Brushes.White;Grid.SetRowSpan(splash,2);Panel.SetZIndex(splash,20);frame.Children.Add(splash);Content=outer;
-  instancePicker.ItemsSource=store.Settings.Instances;instancePicker.SelectedItem=current;instancePicker.SelectionChanged+=async(_,_)=>{if(instancePicker.SelectedItem is Instance selected&&selected!=current){if(busy){instancePicker.SelectedItem=current;return;}current=selected;channelCatalog=null;store.Settings.Selected=current.Id;store.Save();gateway=null;plugins=[];skills=[];channels=[];checkedAt=null;SelectPage(page);await Refresh();}};
+  instancePicker.ItemsSource=store.Settings.Instances;instancePicker.SelectedItem=current;instancePicker.SelectionChanged+=async(_,_)=>{if(instancePicker.SelectedItem is Instance selected&&selected!=current){if(busy){instancePicker.SelectedItem=current;return;}current=selected;channelCatalog=null;store.Settings.Selected=current.Id;store.Save();gateway=null;plugins=[];skills=[];channels=[];checkedAt=null;SelectPage(page);await Refresh();
+   // 0.8.8 重做：「每次实例」启动到控制台都要 ≤10 秒。原先预热只在启动时对当前实例做一次，
+   // 切到别的实例再点启动就是冷启动（OpenClaw 冷启动实测 20~50 秒才应答）→ 远超 10 秒。
+   // 这里切换实例后同样后台预热该实例的网关；WarmGateway 内部会先探端口，已有网关在跑就跳过。
+   if(!screenshot&&!dryRun)_ = WarmGateway();}};
  }
  void UpdateNavigation() {
   // 实例设置模式：顶端 5 个分区导航让位给「实例设置」一项；退出即还原。
