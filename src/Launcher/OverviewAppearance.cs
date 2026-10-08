@@ -7,8 +7,9 @@ public sealed partial class MainWindow
 {
  Button overviewToggle=null!;
  bool overviewCollapsed;
- string GatewayColor=>gateway==null?"#999999":ReadModel.B(gateway["rpc"],"ok")==true?"#248B69":"#D9363E";
- string GatewayLabel=>gateway==null?"状态尚未检查":ReadModel.B(gateway["rpc"],"ok")==true?"网关已就绪":"网关未就绪";
+ bool GatewayReady=>lastGatewayReady??(ReadModel.B(gateway?["rpc"],"ok")==true);
+ string GatewayColor=>gateway==null&&lastGatewayReady==null?"#999999":GatewayReady?"#248B69":"#D9363E";
+ string GatewayLabel=>gateway==null&&lastGatewayReady==null?"状态尚未检查":GatewayReady?"网关已就绪":"网关未就绪";
  void ApplyOverviewVisibility(){
   overviewToggle.Visibility=page=="启动总览"?Visibility.Visible:Visibility.Collapsed;
   overviewToggle.Content=overviewCollapsed?"展开 ▾":"收起 ▴";

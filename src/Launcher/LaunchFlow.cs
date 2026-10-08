@@ -28,7 +28,7 @@ public sealed partial class MainWindow
   progress.Show();await System.Windows.Threading.Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.Render);
   try {
    await StartGatewayCore();
-   LaunchProgress("网关已就绪，正在打开 OpenClaw 控制台…");
+   LaunchProgress("网关端口已开始接收连接；正在打开控制台，插件仍可能在后台初始化…");
    await OpenDashboard();
    launchTimeline=$"点按→网关就绪 {prepareMs/1000.0:0.0}s + 控制台打开 {sinceClick.Elapsed.TotalSeconds-prepareMs/1000.0:0.0}s = {sinceClick.Elapsed.TotalSeconds:0.0}s";
    LaunchProgress("OpenClaw 已启动，控制台已打开（"+sinceClick.Elapsed.TotalSeconds.ToString("0.0")+" 秒）。");
@@ -57,7 +57,7 @@ public sealed partial class MainWindow
   // 截图模式与界面自检模式绝不能真去拉网关：自检要的是「界面能走完」，真启动会把自检拖住，
   // 也会把用户正在用的实例搅乱（历史上就是这样把自检搞成假失败的）。
   if(screenshot||dryRun)return;
-  try { await WarmListCache(); } catch(Exception error) { AddLog("列表快照预热异常："+SafeLog.Clean(error.Message)); }
+  // List discovery is demand-driven; it must not delay or compete with gateway startup.
   await WarmGateway();
  }
 
@@ -66,27 +66,29 @@ public sealed partial class MainWindow
   var instance=current;
   var target=ConsoleEndpoint();
   warmup=true;
+  void Splash(string message){AddLog(message);Dispatcher.BeginInvoke(()=>UpdateWarmupStatus(message));}
   try {
    // 已经有网关在跑（可能是用户自己开的、或别的程序托管的），绝不插手。
+   Splash("后台预热：正在检查网关是否已在运行…");
    if((await ConsoleLauncher.AlreadyRunningAsync(target.Host,target.Port,cancellation?.Token??default)).Ready) {
     warmupSummary="网关已在运行，无需预热。";
-    AddLog("后台预热：检测到网关已经在 "+target.Host+":"+target.Port+" 上运行，跳过。");
+    Splash("后台预热：检测到网关已经在 "+target.Host+":"+target.Port+" 上运行，跳过。");
     return;
    }
    ClearStaleGatewayLock();
    if(closing||current.Id!=instance.Id){warmupSummary="实例已切换，预热取消。";return;}
-   AddLog("后台预热：正在把「"+instance.Name+"」的网关拉起来，这样你点「启动实例」时它已经就绪。");
+   Splash("后台预热：正在启动「"+instance.Name+"」的 OpenClaw 网关，请稍候…");
    StartGatewayProcess();
    var wait=await ConsoleLauncher.WaitReadyAsync(target.Host,target.Port,180000,250,CancellationToken.None);
    warmupSummary=wait.Ready
     ?"已就绪（"+(wait.ElapsedMs/1000.0).ToString("0.0")+" 秒）"
     :"未在 180 秒内就绪";
-   AddLog(wait.Ready
-    ?"后台预热完成：网关已就绪（"+warmupSummary+"）。点「启动实例」或「控制台」会立刻打开。"
-    :"后台预热未完成（"+warmupSummary+"）；点「启动实例」时会继续等它，并给出失败原因。");
+   Splash(wait.Ready
+    ?"后台预热完成：网关已就绪（"+warmupSummary+"）。"
+    :"后台预热未完成（"+warmupSummary+"）；点「启动实例」时会继续等它。");
    if(!closing&&current.Id==instance.Id) {checkedAt=DateTime.Now;if(page=="启动总览")SelectPage(page);}
    _ = RefreshGatewayState();
-  }catch(Exception error){warmupSummary="失败："+SafeLog.Clean(error.Message);AddLog("后台预热失败："+SafeLog.Clean(error.Message));}
+  }catch(Exception error){warmupSummary="失败："+SafeLog.Clean(error.Message);Splash("后台预热失败："+SafeLog.Clean(error.Message));}
   finally{warmup=false;}
  }
 

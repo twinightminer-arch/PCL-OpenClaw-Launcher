@@ -1,6 +1,6 @@
 using System.Diagnostics;
+using System.Net.Http;
 using System.Net.Sockets;
-using System.Text;
 using System.Text.Json.Nodes;
 
 namespace ClawLauncher;
@@ -20,40 +20,56 @@ namespace ClawLauncher;
 /// </summary>
 public static class ConsoleLauncher
 {
- /// <summary>一次健康探测：先连端口，再发一个最小 HTTP 请求看是不是 200。</summary>
- public static async Task<bool> ReadyAsync(string host,int port,int timeoutMs,CancellationToken cancellation=default)
+ static readonly HttpClient probes = new(new SocketsHttpHandler { UseProxy=false, PooledConnectionLifetime=TimeSpan.FromMinutes(2) }) { Timeout=Timeout.InfiniteTimeSpan };
+ /// <summary>探测网关端口；HTTP 忙于插件初始化时，以 TCP 已接收连接作为启动状态。</summary>
+ public static async Task<bool> ReadyAsync(string host,int port,int timeoutMs,CancellationToken cancellation=default) =>
+  await ProbeAsync(host,port,timeoutMs,cancellation).ConfigureAwait(false)==true;
+
+ // null means a refused connection. A TCP accept with a delayed HTTP response means warming.
+ static async Task<bool?> ProbeAsync(string host,int port,int timeoutMs,CancellationToken cancellation)
  {
   if (port <= 0 || port > 65535 || host.Length == 0) return false;
+  using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
+  budget.CancelAfter(Math.Max(80, timeoutMs));
   try
   {
-   using var client = new TcpClient();
-   using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
-   budget.CancelAfter(Math.Max(80, timeoutMs));
-   var connect = client.ConnectAsync(host, port, budget.Token);
-   await connect.ConfigureAwait(false);
-   if (!client.Connected) return false;
-   using var stream = client.GetStream();
-   var request = Encoding.ASCII.GetBytes("GET /healthz HTTP/1.1\r\nHost: " + host + ":" + port + "\r\nConnection: close\r\n\r\n");
-   await stream.WriteAsync(request, budget.Token).ConfigureAwait(false);
-   var buffer = new byte[64];
-   var read = await stream.ReadAsync(buffer.AsMemory(0, buffer.Length), budget.Token).ConfigureAwait(false);
-   if (read <= 0) return false;
-   var statusLine = Encoding.ASCII.GetString(buffer, 0, read);
-   return statusLine.Contains(" 200 ", StringComparison.Ordinal) || statusLine.StartsWith("HTTP/1.1 200", StringComparison.Ordinal);
+   // Windows can complete the TCP handshake while Node's event loop is busy importing
+   // optional plugins. Probe HTTP briefly, but don't wait 110 seconds if it cannot run yet.
+   using var socket = new TcpClient();
+   await socket.ConnectAsync(host, port, budget.Token).ConfigureAwait(false);
+   using var httpBudget = CancellationTokenSource.CreateLinkedTokenSource(budget.Token);
+   httpBudget.CancelAfter(Math.Min(180, Math.Max(80, timeoutMs)));
+   try
+   {
+    using var response = await probes.GetAsync(new UriBuilder("http",host,port,"/healthz").Uri,httpBudget.Token).ConfigureAwait(false);
+    return response.IsSuccessStatusCode;
+   }
+   catch (OperationCanceledException) when (!cancellation.IsCancellationRequested)
+   {
+    return true; // TCP is listening; HTTP handling is delayed by startup work.
+   }
+   catch (HttpRequestException)
+   {
+    return true; // TCP accepted the connection before the HTTP handler stalled.
+   }
   }
+  catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { throw; }
+  catch (SocketException error) when (error.SocketErrorCode == SocketError.ConnectionRefused) { return null; }
   catch (Exception) { return false; }
  }
-
  /// <summary>轮询到就绪为止。返回（是否就绪, 实际等待毫秒）。</summary>
  public static async Task<(bool Ready,long ElapsedMs)> WaitReadyAsync(string host,int port,int timeoutMs,int pollMs=150,CancellationToken cancellation=default)
  {
   var watch = Stopwatch.StartNew();
   while (watch.ElapsedMilliseconds < timeoutMs)
   {
+   cancellation.ThrowIfCancellationRequested();
    // 单次预算 800ms 而不是 400ms：网关忙的时候（插件正在加载）几百毫秒答不上来是常态，
    // 预算太紧会让「等就绪」这一圈一圈地空转，最后误判成「网关没起来」。
-   if (await ReadyAsync(host, port, 800, cancellation).ConfigureAwait(false)) return (true, watch.ElapsedMilliseconds);
-   try { await Task.Delay(Math.Max(40, pollMs), cancellation).ConfigureAwait(false); } catch (OperationCanceledException) { break; }
+   var remaining=(int)Math.Max(1,timeoutMs-watch.ElapsedMilliseconds);
+   if (await ReadyAsync(host, port, Math.Min(800,remaining), cancellation).ConfigureAwait(false)) return (true, watch.ElapsedMilliseconds);
+   remaining=(int)Math.Max(0,timeoutMs-watch.ElapsedMilliseconds);
+   if(remaining>0)await Task.Delay(Math.Min(Math.Max(40,pollMs),remaining),cancellation).ConfigureAwait(false);
   }
   return (false, watch.ElapsedMilliseconds);
  }
@@ -65,8 +81,13 @@ public static class ConsoleLauncher
  /// 结果 OCL 会去启第二个网关、撞上单实例锁——用户看到的就是「启动失败」。
  /// 所以决策点一律走这个：给一个短窗口、内部重试。
  /// </summary>
- public static Task<(bool Ready,long ElapsedMs)> AlreadyRunningAsync(string host,int port,CancellationToken cancellation=default) =>
-  WaitReadyAsync(host, port, 3000, 250, cancellation);
+ public static async Task<(bool Ready,long ElapsedMs)> AlreadyRunningAsync(string host,int port,CancellationToken cancellation=default) {
+  var watch=Stopwatch.StartNew();
+  var first=await ProbeAsync(host,port,800,cancellation).ConfigureAwait(false);
+  if(first!=false)return (first==true,watch.ElapsedMilliseconds);
+  var waited=await WaitReadyAsync(host,port,Math.Max(1,3000-(int)watch.ElapsedMilliseconds),150,cancellation).ConfigureAwait(false);
+  return (waited.Ready,watch.ElapsedMilliseconds);
+ }
 
  /// <summary>本地拼出来的控制台地址与探测地址。</summary>
  public sealed record ConsoleEndpoint(string Url,string Host,int Port,bool LocalUrl,bool Ready,Uri? Official)

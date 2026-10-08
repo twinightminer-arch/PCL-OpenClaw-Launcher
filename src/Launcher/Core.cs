@@ -32,6 +32,9 @@ public sealed class Settings
  // 其余插件需要用户在实例内自行安装或制作。
  public List<string> DefaultPlugins { get; set; } = [];
  public List<string> DefaultSkills { get; set; } = [];
+ // 0.8.8 修订：关闭 OCL 时默认保持 OpenClaw 网关运行，这样下次打开 OCL
+ // 点击「启动实例」时网关已经热好，控制台网页能在 1 秒内出现。
+ public bool KeepGatewayAlive { get; set; } = true;
 }
 public sealed class Appearance
 {
@@ -370,11 +373,18 @@ public sealed class Runner
  }
  public Process StartGateway(Instance instance,Action<string> output) {
   var info=StartInfo(instance,["gateway","run"]);
+  // Let HTTP/control UI respond before optional channel and plugin sidecars load.
+  info.Environment["OPENCLAW_GATEWAY_SIDECAR_STARTUP"]="defer";
+  info.Environment["OPENCLAW_GATEWAY_STARTUP_TRACE"]="1";
+  // 0.8.8 修订：让 source checkout 形态的 OpenClaw 也能走 Node 编译缓存，
+  // 否则每次启动都要重新编译 extensions/ 下的 TS 源码，冷启动实测 178 秒。
+  info.Environment["OPENCLAW_FORCE_PACKAGED_MODE"]="1";
   // 0.8.8 修订：网关是常驻进程，默认会把内存一路吃到 1GB 上下（本机实测 941MB 且只增不减）。
   // 系统内存一紧张，浏览器里的控制台就会整页换页，所有操作都变卡——而网关本身其实很快
   // （本机实测 /healthz 只要 4~6 毫秒）。这里给 V8 一个上限，逼它更积极地回收并把内存还给系统。
   // 768MB 对网关足够（它真正活着的对象远小于此），设得太小反而会让网关因 OOM 退出。
-  info.Environment["NODE_OPTIONS"]="--max-old-space-size=768 --max-semi-space-size=16";
+  // Preserve the operator's Node options and the runtime's adaptive heap sizing.
+  // A fixed 768 MB old-space cap can force GC pauses during plugin initialization.
   var p=new Process {StartInfo=info,EnableRaisingEvents=true};
   p.OutputDataReceived+=(_,e)=> {if(e.Data!=null)output(SafeLog.Clean(e.Data));};
   p.ErrorDataReceived+=(_,e)=> {if(e.Data!=null)output(SafeLog.Clean(e.Data));};

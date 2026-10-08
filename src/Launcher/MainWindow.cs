@@ -59,6 +59,9 @@ public sealed partial class MainWindow : Window
  JsonNode? gateway;
  List<ItemRow> plugins=[],skills=[],channels=[];
  DateTime? checkedAt;
+ // 0.8.8：启动画面上的状态文本，后台预热时实时刷新。
+ TextBlock? warmupStatus;
+ Window? warmupSplash;
  DataGrid? activeGrid;
  TextBox? filter;
  List<ItemRow> activeRows=[];
@@ -77,21 +80,25 @@ public sealed partial class MainWindow : Window
   runner.Log+=AddLog;
   BuildShell();ApplyAppearance();SelectPage("启动总览");
   if(!screenshot)store.EnsureDesktopShortcut();
-  Loaded+=async(_,_)=>{if(!screenshot){await PlayOpening();if(store.Settings.Appearance.MusicAutoPlay)PlayTrack(0);
+  Loaded+=async(_,_)=>{if(!screenshot){_ = ShowWarmupSplash();await StartBackgroundWarmup();CloseWarmupSplash();await PlayOpening();if(store.Settings.Appearance.MusicAutoPlay)PlayTrack(0);
    // 实例独立性由底层自检：同一状态目录被多个实例共用会让插件与 Skill 串台，启动时就说明白。
    foreach(var problem in store.EnsureInstanceIsolation())AddLog("实例隔离检查："+problem);
-   await Refresh();
+   await Refresh(auto:true);
    // 0.8.7：先把插件 / Skill 快照预热好，用户第一次点开这两页就是瞬间全显；
    // 快照预热完再把网关在后台拉起来——这是「点启动 → 控制台出现」进入 10 秒的关键。
    // 两者都要读写同一个 OpenClaw 状态目录，必须串行，不能抢（抢的结果就是网关起不来）。
-   _ = StartBackgroundWarmup();
    timer.Start();}};
   Closed+=(_,_)=>media.Close();
   timer.Tick+=async(_,_)=>{if(!busy&&refreshCancellation==null&&page is "启动总览" or "软件连接")await Refresh(auto:true);};
-  Closing+=(_,e)=>{
-   closing=true;timer.Stop();refreshCancellation?.Cancel();cancellation?.Cancel();
+ Closing+=(_,e)=>{
+  closing=true;timer.Stop();refreshCancellation?.Cancel();cancellation?.Cancel();
+  // 0.8.8 修订：默认保持网关运行（KeepGatewayAlive=true），这样下次打开 OCL
+  // 时网关已经热好，「点击启动 → 控制台网页出现」才能压进 1 秒。
+  // 只在用户显式关闭「保持网关运行」时才清理子进程。
+  if(!store.Settings.KeepGatewayAlive) {
    foreach(var process in owned.Values)try{if(!process.HasExited)process.Kill(true);}catch(InvalidOperationException){}
-  };
+  }
+ };
  }
  static SolidColorBrush Brush(string color)=>new((Color)ColorConverter.ConvertFromString(color));
  internal void CapturePage(string name){SelectPage(name);if(name=="开场动画")ShowSplashFrame();}
@@ -114,6 +121,27 @@ public sealed partial class MainWindow : Window
   if(page=="操作日志"){log.AppendText(text+Environment.NewLine);if(log.Text.Length>200000)log.Text=string.Join(Environment.NewLine,logLines);log.ScrollToEnd();}
  }
  void Error(Exception e) {AddLog(e.Message);status.Text="操作失败，详见日志";MessageBox.Show(this,SafeLog.Clean(e.Message),"操作未完成",MessageBoxButton.OK,MessageBoxImage.Warning);}
+ // 0.8.8：OCL 启动时先显示预热画面，等当前实例网关热好后再进主界面。
+ // 这样用户点击「启动实例」时，网关已经就绪，控制台网页能在 1 秒内出现。
+ object? ShowWarmupSplash() {
+  if(warmup||warmupSplash!=null)return null;
+  warmupStatus=Text("正在预热 OpenClaw 网关…",13,"#666666");
+  var panel=new StackPanel{Margin=new Thickness(24)};
+  panel.Children.Add(new TextBlock{Text="OpenClaw Launcher",FontSize=18,FontWeight=FontWeights.SemiBold,Foreground=Brush("#D9363E"),Margin=new Thickness(0,0,0,12)});
+  panel.Children.Add(warmupStatus);
+  panel.Children.Add(new ProgressBar{IsIndeterminate=true,Height=5,Margin=new Thickness(0,15,0,0)});
+  var splash=new Window{Content=panel,Width=360,Height=150,WindowStartupLocation=WindowStartupLocation.CenterScreen,ResizeMode=ResizeMode.NoResize,WindowStyle=WindowStyle.None,ShowInTaskbar=false,Owner=this};
+  warmupSplash=splash;
+  splash.Show();
+  Dispatcher.Invoke(()=>{},DispatcherPriority.Render);
+  return null;
+ }
+ void UpdateWarmupStatus(string message) {
+  if(warmupStatus!=null)warmupStatus.Text=message;
+ }
+ void CloseWarmupSplash() {
+  if(warmupSplash!=null){try{warmupSplash.Close();}catch{}warmupSplash=null;warmupStatus=null;}
+ }
  async Task Operate(Func<Task> action,string? label=null) {
   // 操作名与耗时都进日志：出问题时能一眼看出「卡住的是哪一步、已经跑了多久」。
   var name=label??(action.Method.DeclaringType?.Name+"."+action.Method.Name);
@@ -153,8 +181,11 @@ public sealed partial class MainWindow : Window
     if(auto) {
      var endpoint=EndpointOf(selected);
      var probe=await ConsoleLauncher.AlreadyRunningAsync(endpoint.Host,endpoint.Port,token);
-     if(lastGatewayReady==probe.Ready)return;   // 状态没变 —— 不抢 CPU，也不重绘
+     if(!Valid())return;
+     if(lastGatewayReady==probe.Ready){status.Text="状态已更新";return;}
      lastGatewayReady=probe.Ready;
+     checkedAt=DateTime.Now;SelectPage(destination);status.Text="状态已更新";
+     return;
     }
     var value=await Query("gateway","status","--json");if(!Valid())return;gateway=value;
    }
@@ -379,10 +410,7 @@ public sealed partial class MainWindow : Window
 
  /// <summary>控制台已打开后再慢慢补一份官方状态给界面（不挡启动路径）。</summary>
  async Task RefreshGatewayState() {
-  try {
-   var result=await runner.Run(current,["gateway","status","--json"],60,CancellationToken.None);
-   if(result.Json() is JsonNode value&&ReadModel.B(value?["rpc"],"ok")==true&&!closing) {gateway=value;SelectPage(page);}
-  } catch(Exception) {}
+  if(!closing&&page=="启动总览")await Refresh(auto:true);
  }
  void ClearStaleGatewayLock() {
   try {
@@ -491,7 +519,7 @@ public sealed partial class MainWindow : Window
  void SwitchToInstance(Instance item) {
   if(item==current)return;
   current=item;channelCatalog=null;store.Settings.Selected=item.Id;store.Save();
-  gateway=null;plugins=[];skills=[];channels=[];checkedAt=null;
+  gateway=null;lastGatewayReady=null;plugins=[];skills=[];channels=[];checkedAt=null;
   instancePicker.Items.Refresh();instancePicker.SelectedItem=item;
   SelectPage("版本选择");if(!busy)_ = Refresh();
  }
@@ -524,7 +552,7 @@ public sealed partial class MainWindow : Window
    if(!Confirm("确定删除实例「"+item.Name+"」？\n"+(item.Managed?"其独立状态目录也会被一并删除。":"该实例为已有安装，仅从列表移除。")))return;
    var wasCurrent=current.Id==item.Id;store.Delete(item);
    if(wasCurrent&&store.Settings.Instances.Count>0)current=store.Settings.Instances[0];
-   instancePicker.Items.Refresh();instancePicker.SelectedItem=current;gateway=null;plugins=[];skills=[];channels=[];checkedAt=null;SelectPage("版本选择");AddLog("已删除实例 "+item.Name);
+   instancePicker.Items.Refresh();instancePicker.SelectedItem=current;gateway=null;lastGatewayReady=null;plugins=[];skills=[];channels=[];checkedAt=null;SelectPage("版本选择");AddLog("已删除实例 "+item.Name);
   });del.MinWidth=52;del.Height=30;del.Padding=new Thickness(10,2,10,2);del.ToolTip="删除实例";del.Foreground=Brush("#D9363E");del.BorderBrush=Brush("#D9363E");
   actions.Children.Add(settings);actions.Children.Add(del);DockPanel.SetDock(actions,Dock.Right);dock.Children.Add(actions);
   var icon=new Image{Source=Brand.Image(),Width=36,Height=36,Stretch=Stretch.Fill,Margin=new Thickness(4,0,12,0),VerticalAlignment=VerticalAlignment.Center};DockPanel.SetDock(icon,Dock.Left);dock.Children.Add(icon);
@@ -570,7 +598,7 @@ public sealed partial class MainWindow : Window
   if(dialog.ShowDialog()!=true)return;
   if(!int.TryParse(port.Text,out var number))throw new Exception("端口必须是数字。");
   if(!File.Exists(Path.Combine(runtime.Text,"openclaw.mjs")))throw new Exception("请先选择有效的版本目录。");
-  var added=store.Create(name.Text,runtime.Text,number,store.Settings.DefaultPlugins);current=added;channelCatalog=null;instancePicker.Items.Refresh();instancePicker.SelectedItem=added;gateway=null;plugins=[];skills=[];channels=[];checkedAt=null;SelectPage("版本选择");AddLog(store.Settings.DefaultPlugins.Count>0?"已按默认插件集创建实例（"+store.Settings.DefaultPlugins.Count+" 项）。":"已创建实例；默认插件集为空，未携带任何插件。");
+  var added=store.Create(name.Text,runtime.Text,number,store.Settings.DefaultPlugins);current=added;channelCatalog=null;instancePicker.Items.Refresh();instancePicker.SelectedItem=added;gateway=null;lastGatewayReady=null;plugins=[];skills=[];channels=[];checkedAt=null;SelectPage("版本选择");AddLog(store.Settings.DefaultPlugins.Count>0?"已按默认插件集创建实例（"+store.Settings.DefaultPlugins.Count+" 项）。":"已创建实例；默认插件集为空，未携带任何插件。");
  }
  DataGrid Table(List<ItemRow> rows,bool account=false) {
   activeRows=rows;filter=Input("",360);filter.ToolTip="按名称、状态或说明筛选";filter.TextChanged+=(_,_)=>{if(activeGrid!=null)activeGrid.ItemsSource=activeRows.Where(r=>(r.Name+" "+r.State+" "+r.Detail).Contains(filter.Text,StringComparison.OrdinalIgnoreCase)).ToList();};
@@ -1047,7 +1075,7 @@ public sealed partial class MainWindow : Window
  }
  void InstanceSettingsPage() {
   var instanceName=Input(current.Name,280);
-  body.Children.Add(Card("实例名称与版本",Text("每个实例对应一个 OpenClaw 版本；把实例改名后再创建，即可让同一版本并存多个实例（如同 PCL 的多个存档）。"),Row(instanceName,Button("重命名",()=>{store.Rename(current,instanceName.Text);instancePicker.Items.Refresh();AddLog("实例已重命名为 "+current.Name);SelectPage(page);}),Button("复制实例",()=>{var clone=store.Duplicate(current,current.Name+" 副本");current=clone;channelCatalog=null;instancePicker.Items.Refresh();instancePicker.SelectedItem=clone;gateway=null;plugins=[];skills=[];channels=[];checkedAt=null;SelectPage(page);AddLog("已复制实例 "+clone.Name);})),Text("当前版本："+current.Version+"  ·  "+(current.Managed?"独立实例（独立配置与工作目录）":"已有安装（使用所选配置）"),12)));
+  body.Children.Add(Card("实例名称与版本",Text("每个实例对应一个 OpenClaw 版本；把实例改名后再创建，即可让同一版本并存多个实例（如同 PCL 的多个存档）。"),Row(instanceName,Button("重命名",()=>{store.Rename(current,instanceName.Text);instancePicker.Items.Refresh();AddLog("实例已重命名为 "+current.Name);SelectPage(page);}),Button("复制实例",()=>{var clone=store.Duplicate(current,current.Name+" 副本");current=clone;channelCatalog=null;instancePicker.Items.Refresh();instancePicker.SelectedItem=clone;gateway=null;lastGatewayReady=null;plugins=[];skills=[];channels=[];checkedAt=null;SelectPage(page);AddLog("已复制实例 "+clone.Name);})),Text("当前版本："+current.Version+"  ·  "+(current.Managed?"独立实例（独立配置与工作目录）":"已有安装（使用所选配置）"),12)));
   body.Children.Add(Toolbar(Text("左侧「实例」栏里的插件、Skill、整合包与运行环境都只作用于当前实例「"+current.Name+"」；切换实例即切换该实例自己的一套。",12)));
   body.Children.Add(Card("新实例默认插件集",Text("下载/创建新实例时只携带这里的“必要插件”，其余由用户自行安装或制作。以当前实例为模板采集最省事。"),Row(AsyncButton("照搬当前实例",CaptureDefaultPlugins,true),Button("清空默认集",()=>{store.Settings.DefaultPlugins=[];store.Save();SelectPage(page);})),Text(store.Settings.DefaultPlugins.Count==0?"尚未采集默认插件集：新实例将不携带任何插件。":"已采集 "+store.Settings.DefaultPlugins.Count+" 个默认插件："+string.Join("、",store.Settings.DefaultPlugins.Take(8))+(store.Settings.DefaultPlugins.Count>8?" …":""),11,"#999999")));
   body.Children.Add(Card("实例状态目录",Text("本实例状态目录："+InstanceStateRoot()+"\n插件与 Skill 只从这里与实例配置加载；启动器在底层保证每个实例各用一套，不需要手动检查。",12),Row(Button("打开状态目录",()=>OpenFolder(InstanceStateRoot())),Button("运行环境与配置",()=>Navigate("运行环境")))));
@@ -1059,7 +1087,7 @@ public sealed partial class MainWindow : Window
   body.Children.Add(Card("运行环境与配置",Text("Node.js 可执行文件"),node,Text("OpenClaw 状态目录（留空使用默认目录）"),state,Text("配置文件路径（留空使用默认规则；不是程序目录里的任意 JSON）"),config,Row(Button("选择配置文件",()=>{var dialog=new OpenFileDialog{Filter="配置文件|*.json;*.json5|所有文件|*.*"};if(dialog.ShowDialog(this)==true)config.Text=dialog.FileName;}),Button("保存",()=>{
    if(owned.TryGetValue(current.Id,out var p)&&!p.HasExited)throw new Exception("请先停止该实例网关，再修改运行设置。");
    RuntimeInstall.ResolveExecutable(node.Text.Trim());if(config.Text.Length>0&&!File.Exists(config.Text))throw new Exception("配置文件不存在。");if(state.Text.Length>0&&!Directory.Exists(state.Text))throw new Exception("状态目录不存在。");
-   store.Settings.Node=node.Text.Trim();runner.Node=store.Settings.Node;current.State=state.Text.Trim();current.Config=config.Text.Trim();store.Save();gateway=null;plugins=[];skills=[];checkedAt=null;
+   store.Settings.Node=node.Text.Trim();runner.Node=store.Settings.Node;current.State=state.Text.Trim();current.Config=config.Text.Trim();store.Save();gateway=null;lastGatewayReady=null;plugins=[];skills=[];checkedAt=null;
    foreach(var problem in store.EnsureInstanceIsolation())AddLog("实例隔离检查："+problem);
    AddLog("设置已保存。");
   }),Button("打开配置向导",()=>OpenWizard(["configure"])),AsyncButton("验证配置",async()=>{await Execute("config","validate");MessageBox.Show(this,"配置验证通过。","检查完成");}))));
